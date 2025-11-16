@@ -102,8 +102,8 @@ class DownloadOrchestrator
         );
 
         $dbSummary = $results['db_success'] ? 'OK' : 'FAILED';
-        $filesDownloaded = $results['files_succeeded'] + $results['batches_succeeded'];
-        $failures = $results['files_failed'] + $results['batches_failed'];
+        $filesDownloaded = $results['files_succeeded'] + $results['batch_files_succeeded'];
+        $failures = $results['files_failed'] + $results['batch_files_failed'];
 
         $this->progressTracker->render(true, true);
         $this->info(sprintf('DB: %s', $dbSummary));

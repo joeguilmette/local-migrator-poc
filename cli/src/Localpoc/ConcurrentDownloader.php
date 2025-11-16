@@ -51,11 +51,10 @@ class ConcurrentDownloader
         $dbId = (int) $dbTransfer['handle'];
         $active[$dbId] = $dbTransfer;
 
-        // Process batch zips (sequentially for now)
-        $batchResults = ['count' => 0, 'failed' => 0];
-        if (!empty($batches)) {
-            $batchResults = $this->batchExtractor->downloadBatches($adminAjaxUrl, $key, $batches, $outputDir);
-        }
+        // Setup batch downloads
+        $nextBatchIndex = 0;
+        $totalBatches = count($batches);
+        $batchResults = ['succeeded' => 0, 'failed' => 0, 'files_succeeded' => 0, 'files_failed' => 0];
 
         // Setup file downloads
         $nextFileIndex = 0;
@@ -63,17 +62,29 @@ class ConcurrentDownloader
         $fileResults = ['succeeded' => 0, 'failed' => 0];
 
         try {
-            // Main event loop: process DB + files concurrently
-            while (!$dbComplete || count($active) > 1 || $nextFileIndex < $totalFiles) {
-                // Add file handles up to concurrency limit (excluding DB transfer)
-                $fileSlots = $maxConcurrency - (count($active) - ($dbComplete ? 0 : 1));
-                while ($fileSlots > 0 && $nextFileIndex < $totalFiles) {
+            // Main event loop: process DB + batches + files concurrently
+            while (!$dbComplete || count($active) > 1 || $nextFileIndex < $totalFiles || $nextBatchIndex < $totalBatches) {
+                // Add batch and file handles up to concurrency limit (excluding DB transfer)
+                $availableSlots = $maxConcurrency - (count($active) - ($dbComplete ? 0 : 1));
+
+                // Prioritize batches first (they're larger, start them early)
+                while ($availableSlots > 0 && $nextBatchIndex < $totalBatches) {
+                    $batch = $batches[$nextBatchIndex++];
+                    $transfer = $this->createBatchTransfer($adminAjaxUrl, $key, $batch, $outputDir);
+                    $handle = $transfer['handle'];
+                    curl_multi_add_handle($multi, $handle);
+                    $active[(int) $handle] = $transfer;
+                    $availableSlots--;
+                }
+
+                // Fill remaining slots with file transfers
+                while ($availableSlots > 0 && $nextFileIndex < $totalFiles) {
                     $fileEntry = $largeFiles[$nextFileIndex++];
                     $transfer = $this->createFileTransfer($adminAjaxUrl, $key, $fileEntry, $outputDir);
                     $handle = $transfer['handle'];
                     curl_multi_add_handle($multi, $handle);
                     $active[(int) $handle] = $transfer;
-                    $fileSlots--;
+                    $availableSlots--;
                 }
 
                 if (empty($active)) {
@@ -124,6 +135,48 @@ class ConcurrentDownloader
                         continue;
                     }
 
+                    // Handle batch transfer completion
+                    if ($transfer['type'] === 'batch') {
+                        $fileCount = count($transfer['batch']);
+
+                        if ($curlErrNo !== 0 || $info['result'] !== CURLE_OK) {
+                            @unlink($transfer['temp_path']);
+                            $message = 'Batch download failed: ' . ($curlErrMsg ?: 'cURL error #' . $curlErrNo);
+                            $batchResults['failed']++;
+                            $batchResults['files_failed'] += $fileCount;
+                            fwrite(STDERR, "[localpoc] ERROR: {$message}\n");
+                            $this->progressTracker->markBatchFailure($fileCount);
+                            continue;
+                        }
+
+                        if ($httpCode < 200 || $httpCode >= 300) {
+                            @unlink($transfer['temp_path']);
+                            $message = 'Batch download returned HTTP ' . $httpCode;
+                            $batchResults['failed']++;
+                            $batchResults['files_failed'] += $fileCount;
+                            fwrite(STDERR, "[localpoc] ERROR: {$message}\n");
+                            $this->progressTracker->markBatchFailure($fileCount);
+                            continue;
+                        }
+
+                        // Download succeeded - extract synchronously (outside loop)
+                        try {
+                            $this->batchExtractor->extractZipArchive($transfer['temp_path'], $transfer['output_dir']);
+                            $batchResults['succeeded']++;
+                            $batchResults['files_succeeded'] += $fileCount;
+                            $this->progressTracker->markBatchSuccess($transfer['batch']);
+                        } catch (RuntimeException $e) {
+                            $batchResults['failed']++;
+                            $batchResults['files_failed'] += $fileCount;
+                            fwrite(STDERR, "[localpoc] ERROR: Batch extraction failed: " . $e->getMessage() . "\n");
+                            $this->progressTracker->markBatchFailure($fileCount);
+                        } finally {
+                            @unlink($transfer['temp_path']);
+                        }
+
+                        continue;
+                    }
+
                     // Handle file transfer completion
                     if ($curlErrNo !== 0 || $info['result'] !== CURLE_OK) {
                         @unlink($transfer['dest_path']);
@@ -158,8 +211,8 @@ class ConcurrentDownloader
             'db_success' => $dbSuccess,
             'files_succeeded' => $fileResults['succeeded'],
             'files_failed' => $fileResults['failed'],
-            'batches_succeeded' => $batchResults['count'] - $batchResults['failed'],
-            'batches_failed' => $batchResults['failed'],
+            'batch_files_succeeded' => $batchResults['files_succeeded'],
+            'batch_files_failed' => $batchResults['files_failed'],
         ];
     }
 
@@ -199,6 +252,59 @@ class ConcurrentDownloader
             'fp'        => $fp,
             'dest_path' => $destPath,
             'type'      => 'database',
+        ];
+    }
+
+    /**
+     * Creates a batch ZIP transfer handle
+     *
+     * @param string $adminAjaxUrl Admin AJAX URL
+     * @param string $key          Access key
+     * @param array  $batch        File batch array
+     * @param string $outputDir    Output directory
+     * @return array Transfer info with handle, fp, temp_path, batch, type
+     */
+    private function createBatchTransfer(string $adminAjaxUrl, string $key, array $batch, string $outputDir): array
+    {
+        // Create temp file for ZIP download
+        $tempZip = tempnam(sys_get_temp_dir(), 'localpoc-batch');
+        if ($tempZip === false) {
+            throw new RuntimeException('Unable to create temp file for batch download.');
+        }
+
+        $fp = fopen($tempZip, 'wb');
+        if ($fp === false) {
+            @unlink($tempZip);
+            throw new RuntimeException('Unable to open temp file for writing: ' . $tempZip);
+        }
+
+        // Build POST params
+        $paths = array_column($batch, 'path');
+        $params = [
+            'action' => 'localpoc_files_batch_zip',
+            'paths'  => $paths,
+            'localpoc_key' => $key,
+        ];
+
+        // Create streaming handle with write callback
+        $handle = Http::createStreamHandle(
+            $adminAjaxUrl,
+            $params,
+            $key,
+            $fp,
+            null,  // No progress callback needed (batches complete atomically)
+            true,  // JSON body for paths array
+            600,   // 10 minute timeout
+            20     // 20 second connect timeout
+        );
+
+        return [
+            'handle'    => $handle,
+            'fp'        => $fp,
+            'temp_path' => $tempZip,
+            'batch'     => $batch,
+            'type'      => 'batch',
+            'output_dir' => $outputDir,
         ];
     }
 
@@ -256,17 +362,25 @@ class ConcurrentDownloader
     private function cleanupActiveTransfers($multiHandle, array $active): void
     {
         foreach ($active as $transfer) {
+            // Close curl handle
             if (isset($transfer['handle'])) {
                 curl_multi_remove_handle($multiHandle, $transfer['handle']);
                 curl_close($transfer['handle']);
             }
 
+            // Close file pointer
             if (isset($transfer['fp']) && is_resource($transfer['fp'])) {
                 fclose($transfer['fp']);
             }
 
+            // Delete destination file (for db/file transfers)
             if (!empty($transfer['dest_path'])) {
                 @unlink($transfer['dest_path']);
+            }
+
+            // Delete temp file (for batch transfers)
+            if (!empty($transfer['temp_path'])) {
+                @unlink($transfer['temp_path']);
             }
         }
     }

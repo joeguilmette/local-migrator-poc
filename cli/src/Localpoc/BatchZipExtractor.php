@@ -89,7 +89,7 @@ class BatchZipExtractor
      * @param string $outputDir Output directory
      * @throws RuntimeException If extraction fails
      */
-    private function extractZipArchive(string $zipPath, string $outputDir): void
+    public function extractZipArchive(string $zipPath, string $outputDir): void
     {
         $zip = new ZipArchive();
         if ($zip->open($zipPath) !== true) {
