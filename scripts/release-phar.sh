@@ -25,24 +25,6 @@ if [[ ! -d "${CLI_DIR}" ]]; then
   exit 1
 fi
 
-pushd "${CLI_DIR}" >/dev/null
-
-echo "[localpoc] Installing PHP dependencies..."
-composer install --prefer-dist --no-progress
-
-if [[ ! -x "${BOX_BIN}" ]]; then
-  echo "[localpoc] Box binary missing. Ensure humbug/box is listed in composer require-dev." >&2
-  exit 1
-fi
-
-echo "[localpoc] Building PHAR with Box..."
-"${BOX_BIN}" compile
-
-if [[ ! -f "${DIST_PHAR}" ]]; then
-  echo "[localpoc] Expected PHAR not found at ${DIST_PHAR}." >&2
-  exit 1
-fi
-
 # Parse version from tag (strip 'v' prefix)
 VERSION="${TAG#v}"
 if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -61,6 +43,35 @@ echo "[localpoc] Updating plugin version to ${VERSION}..."
 sed -i.bak -E "s/(\\* Version: )[0-9]+\\.[0-9]+\\.[0-9]+/\\1${VERSION}/" "${PLUGIN_FILE}"
 sed -i.bak -E "s/(define\\('LOCALPOC_VERSION', ')[0-9]+\\.[0-9]+\\.[0-9]+/\\1${VERSION}/" "${PLUGIN_FILE}"
 rm "${PLUGIN_FILE}.bak"
+
+# Update CLI version
+CLI_FILE="${CLI_DIR}/src/Localpoc/Cli.php"
+if [[ ! -f "${CLI_FILE}" ]]; then
+  echo "[localpoc] CLI file not found at ${CLI_FILE}." >&2
+  exit 1
+fi
+
+echo "[localpoc] Updating CLI version to ${VERSION}..."
+sed -i.bak -E "s/(private const VERSION = ')[0-9]+\\.[0-9]+\\.[0-9]+/\\1${VERSION}/" "${CLI_FILE}"
+rm "${CLI_FILE}.bak"
+
+pushd "${CLI_DIR}" >/dev/null
+
+echo "[localpoc] Installing PHP dependencies..."
+composer install --prefer-dist --no-progress
+
+if [[ ! -x "${BOX_BIN}" ]]; then
+  echo "[localpoc] Box binary missing. Ensure humbug/box is listed in composer require-dev." >&2
+  exit 1
+fi
+
+echo "[localpoc] Building PHAR with Box..."
+"${BOX_BIN}" compile
+
+if [[ ! -f "${DIST_PHAR}" ]]; then
+  echo "[localpoc] Expected PHAR not found at ${DIST_PHAR}." >&2
+  exit 1
+fi
 
 # Install PHAR locally
 echo "[localpoc] Installing PHAR locally..."
@@ -116,11 +127,15 @@ echo "[localpoc] Copied artifacts to releases directory."
 
 # Keep only 2 latest PHARs
 echo "[localpoc] Cleaning up old PHAR versions..."
-ls -t "${RELEASES_DIR}"/localpoc-*.phar 2>/dev/null | tail -n +3 | xargs -I {} rm -f {}
+ls -t "${RELEASES_DIR}"/localpoc-*.phar 2>/dev/null | tail -n +3 | while read -r file; do
+  rm -f "$file"
+done
 
 # Keep only 2 latest plugin ZIPs
 echo "[localpoc] Cleaning up old plugin versions..."
-ls -t "${RELEASES_DIR}"/localpoc-plugin-*.zip 2>/dev/null | tail -n +3 | xargs -I {} rm -f {}
+ls -t "${RELEASES_DIR}"/localpoc-plugin-*.zip 2>/dev/null | tail -n +3 | while read -r file; do
+  rm -f "$file"
+done
 
 echo "[localpoc] Releases directory updated."
 ls -lh "${RELEASES_DIR}"
@@ -139,3 +154,5 @@ fi
 gh release create "${GH_ARGS[@]}"
 
 echo "[localpoc] Release ${TAG} published with PHAR and plugin ZIP."
+echo ""
+localpoc --help

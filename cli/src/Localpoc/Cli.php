@@ -11,6 +11,8 @@ use RuntimeException;
  */
 class Cli
 {
+    private const VERSION = '0.0.6';
+
     private const DEFAULT_OUTPUT = './local-backup';
     private const DEFAULT_CONCURRENCY = 4;
 
@@ -141,6 +143,7 @@ class Cli
     {
         $usage = "Usage: localpoc download --url=<URL> --key=<KEY> [--output=<DIR>] [--concurrency=<N>]";
         fwrite(STDOUT, $usage . "\n");
+        fwrite(STDOUT, "Version: " . self::VERSION . "\n");
     }
 
     /**
