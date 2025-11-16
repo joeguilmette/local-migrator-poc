@@ -1,0 +1,999 @@
+<?php
+declare(strict_types=1);
+
+namespace Localpoc;
+
+use InvalidArgumentException;
+use RuntimeException;
+
+class Cli
+{
+    private const DEFAULT_OUTPUT = './local-backup';
+    private const DEFAULT_CONCURRENCY = 4;
+    private const LARGE_FILE_THRESHOLD = 20971520; // 20 MB
+    private const BATCH_MAX_FILES = 75;
+    private const BATCH_MAX_BYTES = 26214400; // 25 MB
+
+    private const EXIT_SUCCESS = 0;
+    private const EXIT_USAGE = 2;
+    private const EXIT_HTTP = 3;
+    private const EXIT_ERROR = 4;
+
+    /** @var \CurlMultiHandle|resource|null */
+    private $curlMulti = null;
+    private bool $progressInteractive = false;
+    private bool $progressDirty = false;
+    private bool $progressInitialized = false;
+    private float $progressLastRender = 0.0;
+    private array $progress = [
+        'total_files'      => 0,
+        'total_bytes'      => 0,
+        'files_completed'  => 0,
+        'files_failed'     => 0,
+        'file_bytes'       => 0,
+        'db_total'         => 0,
+        'db_streamed'      => 0,
+    ];
+
+    public function run(array $argv): int
+    {
+        $this->progressInteractive = $this->detectInteractiveOutput();
+
+        array_shift($argv); // drop script name
+
+        if (empty($argv)) {
+            $this->printUsage();
+            return self::EXIT_USAGE;
+        }
+
+        $command = array_shift($argv);
+
+        if ($command === 'download') {
+            try {
+                $options = $this->parseOptions($argv);
+            } catch (InvalidArgumentException $e) {
+                $this->error($e->getMessage());
+                $this->printUsage();
+                return self::EXIT_USAGE;
+            }
+
+            try {
+                return $this->handleDownload($options);
+            } catch (HttpException $e) {
+                $this->error($e->getMessage());
+                return self::EXIT_HTTP;
+            } catch (InvalidArgumentException $e) {
+                $this->error($e->getMessage());
+                $this->printUsage();
+                return self::EXIT_USAGE;
+            } catch (RuntimeException $e) {
+                $this->error($e->getMessage());
+                return self::EXIT_ERROR;
+            } catch (\Throwable $e) {
+                $this->error('Unexpected error: ' . $e->getMessage());
+                return self::EXIT_ERROR;
+            }
+        }
+
+        if (in_array($command, ['help', '--help', '-h'], true)) {
+            $this->printUsage();
+            return self::EXIT_SUCCESS;
+        }
+
+        $this->error("Unknown subcommand: {$command}");
+        $this->printUsage();
+        return self::EXIT_USAGE;
+    }
+
+    public function __destruct()
+    {
+        if ($this->curlMulti) {
+            if (is_resource($this->curlMulti) || $this->curlMulti instanceof \CurlMultiHandle) {
+                curl_multi_close($this->curlMulti);
+            }
+            $this->curlMulti = null;
+        }
+    }
+
+    private function parseOptions(array $args): array
+    {
+        $options = [
+            'url'         => null,
+            'key'         => null,
+            'output'      => self::DEFAULT_OUTPUT,
+            'concurrency' => self::DEFAULT_CONCURRENCY,
+        ];
+
+        while (!empty($args)) {
+            $arg = array_shift($args);
+            if (str_starts_with($arg, '--')) {
+                $eq = strpos($arg, '=');
+                if ($eq !== false) {
+                    $name = substr($arg, 2, $eq - 2);
+                    $value = substr($arg, $eq + 1);
+                } else {
+                    $name = substr($arg, 2);
+                    if (empty($args)) {
+                        throw new InvalidArgumentException("Option --{$name} requires a value.");
+                    }
+                    $value = array_shift($args);
+                }
+
+                $name = strtolower($name);
+                switch ($name) {
+                    case 'url':
+                    case 'key':
+                    case 'output':
+                        $options[$name] = trim($value);
+                        break;
+                    case 'concurrency':
+                        if (!ctype_digit((string) $value) || (int) $value < 1) {
+                            throw new InvalidArgumentException('Concurrency must be a positive integer.');
+                        }
+                        $options['concurrency'] = (int) $value;
+                        break;
+                    default:
+                        throw new InvalidArgumentException("Unknown option --{$name}.");
+                }
+            } else {
+                throw new InvalidArgumentException("Unexpected argument: {$arg}");
+            }
+        }
+
+        if (empty($options['url']) || empty($options['key'])) {
+            throw new InvalidArgumentException('Both --url and --key are required.');
+        }
+
+        if (empty($options['output'])) {
+            $options['output'] = self::DEFAULT_OUTPUT;
+        }
+
+        return $options;
+    }
+
+    private function handleDownload(array $options): int
+    {
+        $url = $options['url'];
+        $key = $options['key'];
+        $outputDir = $options['output'];
+        $concurrency = (int) $options['concurrency'];
+
+        $this->info('Starting download command');
+        $this->info('Output directory: ' . $outputDir);
+
+        $this->ensureOutputDir($outputDir);
+
+        $adminAjaxUrl = Http::buildAdminAjaxUrl($url);
+        $this->info('Using API base: ' . $adminAjaxUrl);
+        $this->info('Starting manifest job...');
+
+        $jobId = null;
+        $partition = null;
+        $jobTotals = ['total_files' => 0, 'total_bytes' => 0];
+
+        $dbMetaBytes = $this->fetchDbMeta($adminAjaxUrl, $key);
+
+        try {
+            $jobInfo = $this->initializeManifestJob($adminAjaxUrl, $key);
+            $jobId = $jobInfo['job_id'];
+            $jobTotals['total_files'] = (int) ($jobInfo['total_files'] ?? 0);
+            $jobTotals['total_bytes'] = (int) ($jobInfo['total_bytes'] ?? 0);
+            $this->info(sprintf('Manifest job %s: %d files (~%d bytes)', $jobId, $jobTotals['total_files'], $jobTotals['total_bytes']));
+
+            $partition = $this->collectManifestEntries($adminAjaxUrl, $key, $jobId, $this->getMultiHandle());
+        } finally {
+            $this->finishManifestJob($adminAjaxUrl, $key, $jobId, $this->getMultiHandle());
+        }
+
+        if ($partition === null) {
+            throw new RuntimeException('Failed to collect manifest entries.');
+        }
+
+        $fileCount = $partition['total_files'];
+        $totalSize = $partition['total_bytes'];
+        $largeFiles = $partition['large'];
+        $batches = $partition['batches'];
+
+        $this->initProgressCounters($fileCount, $totalSize, $dbMetaBytes);
+
+        $this->info(sprintf(
+            'Manifest ready: %d files (%d bytes) -> %d large, %d batches',
+            $fileCount,
+            $totalSize,
+            count($largeFiles),
+            count($batches)
+        ));
+
+        // Create DB transfer (don't execute yet)
+        $dbTransfer = $this->createDatabaseTransfer($adminAjaxUrl, $key, $outputDir);
+
+        $this->info('Starting concurrent downloads (DB + files)...');
+
+        // Execute DB + batch zips + large files concurrently
+        $results = $this->downloadConcurrently(
+            $adminAjaxUrl,
+            $key,
+            $dbTransfer,
+            $batches,
+            $largeFiles,
+            $outputDir,
+            $concurrency,
+            $this->getMultiHandle()
+        );
+
+        $dbSummary = $results['db_success'] ? 'OK' : 'FAILED';
+        $filesDownloaded = $this->progress['files_completed'];
+        $failures = $this->progress['files_failed'];
+        $this->renderProgressLine(true, true);
+        $this->info(sprintf('DB: %s', $dbSummary));
+        $this->info(sprintf(
+            'Files: %d/%d (failed %d)',
+            $filesDownloaded,
+            $fileCount,
+            $failures
+        ));
+        $resolvedOutput = realpath($outputDir) ?: $outputDir;
+        $this->info('Output directory: ' . $resolvedOutput);
+
+        if (!$results['db_success'] || $failures > 0) {
+            return self::EXIT_HTTP;
+        }
+
+        return self::EXIT_SUCCESS;
+    }
+
+    private function ensureOutputDir(string $path): void
+    {
+        if ($path === '') {
+            throw new InvalidArgumentException('Output directory cannot be empty.');
+        }
+
+        if (is_dir($path)) {
+            return;
+        }
+
+        if (file_exists($path) && !is_dir($path)) {
+            throw new RuntimeException("Output path {$path} exists and is not a directory.");
+        }
+
+        if (!mkdir($path, 0755, true) && !is_dir($path)) {
+            throw new RuntimeException('Unable to create output directory: ' . $path);
+        }
+    }
+
+    private function ensureParentDir(string $path): void
+    {
+        $dir = dirname($path);
+        if ($dir === '' || $dir === '.' || $dir === DIRECTORY_SEPARATOR) {
+            return;
+        }
+
+        if (is_dir($dir)) {
+            return;
+        }
+
+        if (!mkdir($dir, 0755, true) && !is_dir($dir)) {
+            throw new RuntimeException('Unable to create directory: ' . $dir);
+        }
+    }
+
+    private function createDatabaseTransfer(string $adminAjaxUrl, string $key, string $outputDir): array
+    {
+        $normalizedBase = rtrim($outputDir, '\\\/');
+        $destPath = $normalizedBase === '' ? 'db.sql' : $normalizedBase . DIRECTORY_SEPARATOR . 'db.sql';
+        $this->ensureParentDir($destPath);
+
+        $fp = fopen($destPath, 'wb');
+        if ($fp === false) {
+            throw new RuntimeException('Unable to open file for writing: ' . $destPath);
+        }
+
+        $handle = Http::createStreamHandle(
+            $adminAjaxUrl,
+            ['action' => 'localpoc_db_stream', 'localpoc_key' => $key],
+            $key,
+            $fp,
+            function (int $bytes): void {
+                $this->incrementDbBytes($bytes);
+            },
+            false,
+            600,
+            20
+        );
+
+        return [
+            'handle'    => $handle,
+            'fp'        => $fp,
+            'dest_path' => $destPath,
+            'type'      => 'database',
+        ];
+    }
+
+    private function downloadConcurrently(string $adminAjaxUrl, string $key, array $dbTransfer, array $batches, array $largeFiles, string $outputDir, int $maxConcurrency, $multiHandle): array
+    {
+        if (!function_exists('curl_multi_init')) {
+            throw new RuntimeException('Concurrent downloads require the cURL extension.');
+        }
+
+        $multi = $multiHandle;
+        $maxConcurrency = max(1, $maxConcurrency);
+        $active = [];
+        $dbComplete = false;
+        $dbSuccess = false;
+
+        // Add DB transfer immediately
+        curl_multi_add_handle($multi, $dbTransfer['handle']);
+        $dbId = (int) $dbTransfer['handle'];
+        $active[$dbId] = $dbTransfer;
+
+        // Process batch zips first (sequentially for now, can be parallelized later)
+        $batchResults = ['count' => 0, 'failed' => 0];
+        if (!empty($batches)) {
+            $batchResults = $this->downloadBatchZips($adminAjaxUrl, $key, $batches, $outputDir, $multi);
+        }
+
+        // Setup file downloads
+        $nextFileIndex = 0;
+        $totalFiles = count($largeFiles);
+        $fileResults = ['succeeded' => 0, 'failed' => 0];
+
+        try {
+            // Main event loop: process DB + files concurrently
+            while (!$dbComplete || count($active) > 1 || $nextFileIndex < $totalFiles) {
+                // Add file handles up to concurrency limit (excluding DB transfer)
+                $fileSlots = $maxConcurrency - (count($active) - ($dbComplete ? 0 : 1));
+                while ($fileSlots > 0 && $nextFileIndex < $totalFiles) {
+                    $fileEntry = $largeFiles[$nextFileIndex++];
+                    $transfer = $this->createFileTransfer($adminAjaxUrl, $key, $fileEntry, $outputDir);
+                    $handle = $transfer['handle'];
+                    curl_multi_add_handle($multi, $handle);
+                    $active[(int) $handle] = $transfer;
+                    $fileSlots--;
+                }
+
+                if (empty($active)) {
+                    break;
+                }
+
+                do {
+                    $status = curl_multi_exec($multi, $running);
+                } while ($status === CURLM_CALL_MULTI_PERFORM);
+
+                if ($status !== CURLM_OK) {
+                    throw new RuntimeException('cURL multi error: ' . $status);
+                }
+
+                // Process completed transfers
+                while ($info = curl_multi_info_read($multi)) {
+                    $handle = $info['handle'];
+                    $id = (int) $handle;
+
+                    if (!isset($active[$id])) {
+                        curl_multi_remove_handle($multi, $handle);
+                        curl_close($handle);
+                        continue;
+                    }
+
+                    $transfer = $active[$id];
+                    unset($active[$id]);
+
+                    fclose($transfer['fp']);
+
+                    $httpCode = curl_getinfo($handle, CURLINFO_HTTP_CODE);
+                    $curlErrNo = curl_errno($handle);
+                    $curlErrMsg = curl_error($handle);
+
+                    curl_multi_remove_handle($multi, $handle);
+                    curl_close($handle);
+
+                    // Handle DB transfer completion
+                    if ($transfer['type'] === 'database') {
+                        $dbComplete = true;
+                        if ($curlErrNo !== 0 || $info['result'] !== CURLE_OK || $httpCode < 200 || $httpCode >= 300) {
+                            @unlink($transfer['dest_path']);
+                            $this->error('Database download failed: ' . ($curlErrMsg ?: 'HTTP ' . $httpCode));
+                            $dbSuccess = false;
+                        } else {
+                            $dbSuccess = true;
+                        }
+                        continue;
+                    }
+
+                    // Handle file transfer completion
+                    if ($curlErrNo !== 0 || $info['result'] !== CURLE_OK) {
+                        @unlink($transfer['dest_path']);
+                        $message = 'Download failed for ' . $transfer['file']['path'] . ': ' . ($curlErrMsg ?: 'cURL error #' . $curlErrNo);
+                        $fileResults['failed']++;
+                        $this->error($message);
+                        $this->markFileFailure();
+                    } elseif ($httpCode < 200 || $httpCode >= 300) {
+                        @unlink($transfer['dest_path']);
+                        $message = 'Server returned HTTP ' . $httpCode . ' for file ' . $transfer['file']['path'];
+                        $fileResults['failed']++;
+                        $this->error($message);
+                        $this->markFileFailure();
+                    } else {
+                        $fileResults['succeeded']++;
+                        $this->markFileSuccess((int) ($transfer['file']['size'] ?? 0));
+                    }
+                }
+
+                if (!empty($active)) {
+                    $select = curl_multi_select($multi, 1.0);
+                    if ($select === -1) {
+                        usleep(100000);
+                    }
+                }
+            }
+        } finally {
+            $this->cleanupActiveTransfers($multi, $active);
+        }
+
+        return [
+            'db_success' => $dbSuccess,
+            'files_succeeded' => $fileResults['succeeded'],
+            'files_failed' => $fileResults['failed'],
+            'batches_succeeded' => $batchResults['count'] - $batchResults['failed'],
+            'batches_failed' => $batchResults['failed'],
+        ];
+    }
+
+    private function downloadFilesParallel(string $adminAjaxUrl, string $key, array $files, string $outputDir, int $maxConcurrency, $multiHandle): array
+    {
+        $results = [
+            'total'     => count($files),
+            'succeeded' => 0,
+            'failed'    => 0,
+            'errors'    => [],
+        ];
+
+        if ($results['total'] === 0) {
+            $this->info('Manifest contains no files; skipping file download.');
+            return $results;
+        }
+
+        if (!function_exists('curl_multi_init')) {
+            throw new RuntimeException('Parallel downloads require the cURL extension.');
+        }
+
+        $multi = $multiHandle;
+
+        $maxConcurrency = max(1, $maxConcurrency);
+        $active = [];
+        $nextIndex = 0;
+
+        try {
+            while (($results['succeeded'] + $results['failed']) < $results['total'] || !empty($active)) {
+                while (count($active) < $maxConcurrency && $nextIndex < $results['total']) {
+                    $fileEntry = $files[$nextIndex++];
+                    $transfer = $this->createFileTransfer($adminAjaxUrl, $key, $fileEntry, $outputDir);
+                    $handle = $transfer['handle'];
+                    curl_multi_add_handle($multi, $handle);
+                    $active[(int) $handle] = $transfer;
+                }
+
+                if (empty($active)) {
+                    break;
+                }
+
+                do {
+                    $status = curl_multi_exec($multi, $running);
+                } while ($status === CURLM_CALL_MULTI_PERFORM);
+
+                if ($status !== CURLM_OK) {
+                    throw new RuntimeException('cURL multi error: ' . $status);
+                }
+
+                while ($info = curl_multi_info_read($multi)) {
+                    $handle = $info['handle'];
+                    $id = (int) $handle;
+
+                    if (!isset($active[$id])) {
+                        curl_multi_remove_handle($multi, $handle);
+                        curl_close($handle);
+                        continue;
+                    }
+
+                    $transfer = $active[$id];
+                    unset($active[$id]);
+
+                    fclose($transfer['fp']);
+
+                    $httpCode = curl_getinfo($handle, CURLINFO_HTTP_CODE);
+                    $curlErrNo = curl_errno($handle);
+                    $curlErrMsg = curl_error($handle);
+
+                    curl_multi_remove_handle($multi, $handle);
+                    curl_close($handle);
+
+                    if ($curlErrNo !== 0 || $info['result'] !== CURLE_OK) {
+                        @unlink($transfer['dest_path']);
+                        $message = 'Download failed for ' . $transfer['file']['path'] . ': ' . ($curlErrMsg ?: 'cURL error #' . $curlErrNo);
+                        $results['failed']++;
+                        $results['errors'][] = $message;
+                        $this->error($message);
+                        $this->markFileFailure();
+                    } elseif ($httpCode < 200 || $httpCode >= 300) {
+                        @unlink($transfer['dest_path']);
+                        $message = 'Server returned HTTP ' . $httpCode . ' for file ' . $transfer['file']['path'];
+                        $results['failed']++;
+                        $results['errors'][] = $message;
+                        $this->error($message);
+                        $this->markFileFailure();
+                    } else {
+                        $results['succeeded']++;
+                         $this->markFileSuccess((int) ($transfer['file']['size'] ?? 0));
+                    }
+
+                }
+
+                if (!empty($active)) {
+                    $select = curl_multi_select($multi, 1.0);
+                    if ($select === -1) {
+                        usleep(100000);
+                    }
+                }
+            }
+        } finally {
+            $this->cleanupActiveTransfers($multi, $active);
+        }
+
+        return $results;
+    }
+
+    private function createFileTransfer(string $adminAjaxUrl, string $key, array $fileEntry, string $outputDir): array
+    {
+        if (!isset($fileEntry['path']) || !is_string($fileEntry['path']) || $fileEntry['path'] === '') {
+            throw new RuntimeException('Manifest entry is missing the file path.');
+        }
+
+        $relativePath = ltrim(str_replace('\\', '/', $fileEntry['path']), '/');
+        $normalizedBase = rtrim($outputDir, '\\\/');
+        $localPath = $normalizedBase === ''
+            ? str_replace('/', DIRECTORY_SEPARATOR, $relativePath)
+            : $normalizedBase . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relativePath);
+
+        $this->ensureParentDir($localPath);
+
+        $fp = fopen($localPath, 'wb');
+        if ($fp === false) {
+            throw new RuntimeException('Unable to open file for writing: ' . $localPath);
+        }
+
+        $params = [
+            'action'        => 'localpoc_file',
+            'path'          => $relativePath,
+            'localpoc_key'  => $key,
+        ];
+
+        $handle = Http::createFileCurlHandle($adminAjaxUrl, $params, $key, $fp);
+
+        return [
+            'handle'    => $handle,
+            'fp'        => $fp,
+            'file'      => $fileEntry,
+            'dest_path' => $localPath,
+        ];
+    }
+
+    private function cleanupActiveTransfers($multiHandle, array $active): void
+    {
+        foreach ($active as $transfer) {
+            if (isset($transfer['handle'])) {
+                curl_multi_remove_handle($multiHandle, $transfer['handle']);
+                curl_close($transfer['handle']);
+            }
+
+            if (isset($transfer['fp']) && is_resource($transfer['fp'])) {
+                fclose($transfer['fp']);
+            }
+
+            if (!empty($transfer['dest_path'])) {
+                @unlink($transfer['dest_path']);
+            }
+        }
+    }
+
+    /**
+     * @return \CurlMultiHandle|resource
+     */
+    private function getMultiHandle()
+    {
+        if ($this->curlMulti === null) {
+            $multi = curl_multi_init();
+            if ($multi === false) {
+                throw new RuntimeException('Failed to initialize curl_multi.');
+            }
+            $this->curlMulti = $multi;
+        }
+
+        return $this->curlMulti;
+    }
+
+    private function detectInteractiveOutput(): bool
+    {
+        if (function_exists('posix_isatty')) {
+            return @posix_isatty(STDOUT);
+        }
+
+        return false;
+    }
+
+    private function fetchDbMeta(string $adminAjaxUrl, string $key): int
+    {
+        try {
+            $response = Http::postJson($adminAjaxUrl, [
+                'action'       => 'localpoc_db_meta',
+                'localpoc_key' => $key,
+            ], $key, $this->getMultiHandle());
+
+            return (int) ($response['total_approx_bytes'] ?? 0);
+        } catch (HttpException $e) {
+            $this->error('Failed to fetch DB meta: ' . $e->getMessage());
+        }
+
+        return 0;
+    }
+
+    private function initProgressCounters(int $fileTotal, int $fileBytes, int $dbBytes): void
+    {
+        $this->progress = [
+            'total_files'      => max(0, $fileTotal),
+            'total_bytes'      => max(0, $fileBytes),
+            'files_completed'  => 0,
+            'files_failed'     => 0,
+            'file_bytes'       => 0,
+            'db_total'         => max(0, $dbBytes),
+            'db_streamed'      => 0,
+        ];
+        $this->progressInitialized = true;
+        $this->renderProgressLine(true, true);
+    }
+
+    private function markFileSuccess(int $bytes): void
+    {
+        if (!$this->progressInitialized) {
+            return;
+        }
+
+        $this->progress['files_completed']++;
+        $this->progress['file_bytes'] += max(0, $bytes);
+        $this->renderProgressLine(false, !$this->progressInteractive);
+    }
+
+    private function markFileFailure(int $count = 1): void
+    {
+        if (!$this->progressInitialized) {
+            return;
+        }
+
+        $this->progress['files_failed'] += max(0, $count);
+        $this->renderProgressLine(false, !$this->progressInteractive);
+    }
+
+    private function markBatchSuccess(array $files): void
+    {
+        if (!$this->progressInitialized) {
+            return;
+        }
+
+        $count = count($files);
+        $bytes = 0;
+        foreach ($files as $file) {
+            $bytes += (int) ($file['size'] ?? 0);
+        }
+
+        $this->progress['files_completed'] += $count;
+        $this->progress['file_bytes'] += $bytes;
+        $this->renderProgressLine(false, !$this->progressInteractive);
+    }
+
+    private function markBatchFailure(int $count): void
+    {
+        $this->markFileFailure($count);
+    }
+
+    private function incrementDbBytes(int $bytes): void
+    {
+        if (!$this->progressInitialized) {
+            return;
+        }
+
+        $this->progress['db_streamed'] += max(0, $bytes);
+        $this->renderProgressLine();
+    }
+
+    private function renderProgressLine(bool $final = false, bool $force = false): void
+    {
+        if (!$this->progressInitialized) {
+            return;
+        }
+
+        $now = microtime(true);
+        $interval = $this->progressInteractive ? 0.5 : 5.0;
+        if (!$force && !$final && ($now - $this->progressLastRender) < $interval) {
+            return;
+        }
+
+        $this->progressLastRender = $now;
+
+        $dbTotal = $this->progress['db_total'];
+        $dbStreamed = $this->progress['db_streamed'];
+        $filesCompleted = $this->progress['files_completed'];
+        $filesFailed = $this->progress['files_failed'];
+        $filesTotal = $this->progress['total_files'];
+        $fileBytes = $this->progress['file_bytes'];
+        $totalBytes = $this->progress['total_bytes'];
+
+        $dbPart = $dbTotal > 0
+            ? sprintf('%s/%s', $this->formatBytes($dbStreamed), $this->formatBytes($dbTotal))
+            : sprintf('%s/?', $this->formatBytes($dbStreamed));
+
+        $filesPart = $filesTotal > 0
+            ? sprintf('%d/%d (failed %d)', $filesCompleted, $filesTotal, $filesFailed)
+            : sprintf('%d files (failed %d)', $filesCompleted, $filesFailed);
+
+        $overall = '?';
+        $denominator = $totalBytes + $dbTotal;
+        if ($denominator > 0) {
+            $overallPct = ($fileBytes + $dbStreamed) / $denominator * 100;
+            $overall = sprintf('%.1f%%', min(100, $overallPct));
+        }
+
+        $line = sprintf('DB: %s | Files: %s | Overall: %s', $dbPart, $filesPart, $overall);
+
+        if ($this->progressInteractive) {
+            $output = '\r[localpoc] ' . $line;
+            fwrite(STDOUT, $output);
+            $this->progressDirty = true;
+            if ($final) {
+                fwrite(STDOUT, "\r[localpoc] {$line}\n");
+                $this->progressDirty = false;
+            }
+        } elseif ($final || $force) {
+            $this->info($line);
+        }
+    }
+
+    private function ensureProgressNewline(): void
+    {
+        if ($this->progressInteractive && $this->progressDirty) {
+            fwrite(STDOUT, "\n");
+            $this->progressDirty = false;
+        }
+    }
+
+    private function formatBytes(int $bytes): string
+    {
+        if ($bytes >= 1073741824) {
+            return sprintf('%.2f GB', $bytes / 1073741824);
+        }
+        if ($bytes >= 1048576) {
+            return sprintf('%.2f MB', $bytes / 1048576);
+        }
+        if ($bytes >= 1024) {
+            return sprintf('%.2f KB', $bytes / 1024);
+        }
+
+        return $bytes . ' B';
+    }
+
+    private function printUsage(): void
+    {
+        $usage = "Usage: localpoc download --url=<URL> --key=<KEY> [--output=<DIR>] [--concurrency=<N>]";
+        fwrite(STDOUT, $usage . "\n");
+    }
+
+    private function info(string $message): void
+    {
+        $this->ensureProgressNewline();
+        fwrite(STDOUT, '[localpoc] ' . $message . "\n");
+    }
+
+    private function error(string $message): void
+    {
+        $this->ensureProgressNewline();
+        fwrite(STDERR, '[localpoc] ERROR: ' . $message . "\n");
+    }
+
+    private function initializeManifestJob(string $adminAjaxUrl, string $key): array
+    {
+        $response = Http::postJson($adminAjaxUrl, [
+            'action'      => 'localpoc_job_init',
+            'localpoc_key' => $key,
+        ], $key, $this->getMultiHandle());
+
+        if (empty($response['job_id'])) {
+            throw new RuntimeException('Failed to initialize manifest job.');
+        }
+
+        return $response;
+    }
+
+    private function finishManifestJob(string $adminAjaxUrl, string $key, ?string $jobId, $multiHandle): void
+    {
+        if (empty($jobId)) {
+            return;
+        }
+
+        try {
+            Http::postJson($adminAjaxUrl, [
+                'action'      => 'localpoc_job_finish',
+                'localpoc_key' => $key,
+                'job_id'      => $jobId,
+            ], $key, $multiHandle);
+        } catch (HttpException $e) {
+            $this->error('Failed to finish manifest job: ' . $e->getMessage());
+        }
+    }
+
+    private function collectManifestEntries(string $adminAjaxUrl, string $key, string $jobId, $multiHandle): array
+    {
+        $offset = 0;
+        $limit = 5000;
+        $totalFiles = 0;
+        $totalBytes = 0;
+        $large = [];
+        $batches = [];
+        $currentBatch = [];
+        $currentBytes = 0;
+
+        while (true) {
+            $response = Http::postJson($adminAjaxUrl, [
+                'action'       => 'localpoc_files_manifest',
+                'localpoc_key' => $key,
+                'job_id'       => $jobId,
+                'offset'       => $offset,
+                'limit'        => $limit,
+            ], $key, $multiHandle);
+
+            $files = $response['files'] ?? [];
+            if (empty($files)) {
+                break;
+            }
+
+            foreach ($files as $file) {
+                if (!is_array($file) || !isset($file['path'], $file['size'])) {
+                    continue;
+                }
+
+                $size = (int) $file['size'];
+                $totalBytes += $size;
+                $totalFiles++;
+
+                if ($size >= self::LARGE_FILE_THRESHOLD) {
+                    $large[] = $file;
+                    continue;
+                }
+
+                $currentBatch[] = $file;
+                $currentBytes += $size;
+
+                if (count($currentBatch) >= self::BATCH_MAX_FILES || $currentBytes >= self::BATCH_MAX_BYTES) {
+                    $batches[] = $currentBatch;
+                    $currentBatch = [];
+                    $currentBytes = 0;
+                }
+            }
+
+            $offset += count($files);
+            $reportedTotal = (int) ($response['total_files'] ?? 0);
+            if ($reportedTotal > 0 && $offset >= $reportedTotal) {
+                break;
+            }
+        }
+
+        if (!empty($currentBatch)) {
+            $batches[] = $currentBatch;
+        }
+
+        return [
+            'large'       => $large,
+            'batches'     => $batches,
+            'total_files' => $totalFiles,
+            'total_bytes' => $totalBytes,
+        ];
+    }
+
+    private function downloadBatchZips(string $adminAjaxUrl, string $key, array $batches, string $outputDir, $multiHandle): array
+    {
+        if (!class_exists('\ZipArchive')) {
+            throw new RuntimeException('PHP ZipArchive extension is required for batch downloads.');
+        }
+
+        $results = [
+            'batches' => 0,
+            'files'   => 0,
+            'failed'  => 0,
+        ];
+
+        $batchUrl = $adminAjaxUrl . '?action=localpoc_files_batch_zip';
+
+        foreach ($batches as $batch) {
+            $results['batches']++;
+            $tempZip = tempnam(sys_get_temp_dir(), 'localpoc-batch');
+            if ($tempZip === false) {
+                throw new RuntimeException('Unable to create temp file for batch download.');
+            }
+
+            try {
+                $paths = array_column($batch, 'path');
+                Http::streamToFile(
+                    $batchUrl,
+                    ['paths' => $paths],
+                    $key,
+                    $tempZip,
+                    600,
+                    $multiHandle,
+                    null,
+                    true
+                );
+                $this->extractZipArchive($tempZip, $outputDir);
+                $results['files'] += count($batch);
+                $this->markBatchSuccess($batch);
+            } catch (HttpException $e) {
+                $results['failed'] += count($batch);
+                $this->markBatchFailure(count($batch));
+                $this->error('Batch download failed: ' . $e->getMessage());
+            } catch (RuntimeException $e) {
+                $results['failed'] += count($batch);
+                $this->markBatchFailure(count($batch));
+                $this->error('Batch extraction failed: ' . $e->getMessage());
+            } finally {
+                @unlink($tempZip);
+            }
+        }
+
+        return $results;
+    }
+
+    private function extractZipArchive(string $zipPath, string $outputDir): void
+    {
+        $zip = new \ZipArchive();
+        if ($zip->open($zipPath) !== true) {
+            throw new RuntimeException('Unable to open batch zip archive.');
+        }
+
+        $this->ensureOutputDir($outputDir);
+        $base = realpath($outputDir);
+        if ($base === false) {
+            $zip->close();
+            throw new RuntimeException('Unable to resolve output directory.');
+        }
+
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $entryName = $zip->getNameIndex($i);
+            if ($entryName === false) {
+                continue;
+            }
+
+            $normalized = ltrim(str_replace('\\', '/', $entryName), '/');
+            if ($normalized === '' || strpos($normalized, '../') !== false) {
+                continue;
+            }
+
+            $target = $base . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $normalized);
+
+            if (str_ends_with($normalized, '/')) {
+                $this->ensureOutputDir($target);
+                continue;
+            }
+
+            $this->ensureParentDir($target);
+            $input = $zip->getStream($entryName);
+            if ($input === false) {
+                continue;
+            }
+            $output = fopen($target, 'wb');
+            if ($output === false) {
+                fclose($input);
+                throw new RuntimeException('Unable to write extracted file: ' . $normalized);
+            }
+            stream_copy_to_stream($input, $output);
+            fclose($input);
+            fclose($output);
+        }
+
+        $zip->close();
+    }
+}
