@@ -1,0 +1,16 @@
+# OS / editor cruft
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# PHP / Composer build output
+cli/vendor/
+cli/dist/
+cli/composer.lock
+
+# Box artifacts
+cli/.box.cache
+
+# Logs / temp
+*.log
