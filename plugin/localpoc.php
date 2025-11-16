@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name: Local Site Downloader POC
+ * Plugin Name: Local Migrator
  * Plugin URI: https://example.com/localpoc
  * Description: Exposes an API for downloading WordPress sites via a local CLI utility.
  * Version: 0.1.0
@@ -54,8 +54,8 @@ class LocalPOC_Plugin {
     /** Registers the admin settings page. */
     public static function register_admin_menu() {
         add_menu_page(
-            'Local Site Downloader',           // Page title
-            'Site Downloader',                 // Menu title
+            'Local Migrator',                  // Page title
+            'Local Migrator',                  // Menu title
             'manage_options',                  // Capability
             'localpoc-downloader',             // Menu slug
             [__CLASS__, 'render_admin_page'],  // Callback
@@ -73,14 +73,14 @@ class LocalPOC_Plugin {
         $access_key = self::get_access_key();
         $site_url = site_url();
         $cli_command = sprintf(
-            'php localpoc.php download --url="%s" --key="%s" --output="./local-backup"',
+            'localpoc download --url="%s" --key="%s" --output="./local-backup"',
             esc_attr($site_url),
             esc_attr($access_key)
         );
 
         ?>
         <div class="wrap">
-            <h1>Local Site Downloader POC</h1>
+            <h1>Local Migrator</h1>
 
             <div style="max-width: 800px;">
                 <h2>Connection Details</h2>
