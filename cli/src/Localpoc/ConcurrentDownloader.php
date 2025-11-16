@@ -34,7 +34,7 @@ class ConcurrentDownloader
      * @param int    $maxConcurrency Max concurrent downloads
      * @return array Results with success/failure counts
      */
-    public function downloadConcurrently(string $adminAjaxUrl, string $key, array $dbTransfer, array $batches, array $largeFiles, string $outputDir, int $maxConcurrency): array
+    public function downloadConcurrently(string $adminAjaxUrl, string $key, array $dbTransfer, array $batches, array $largeFiles, string $filesOutputDir, int $maxConcurrency): array
     {
         if (!function_exists('curl_multi_init')) {
             throw new RuntimeException('Concurrent downloads require the cURL extension.');
@@ -69,7 +69,7 @@ class ConcurrentDownloader
                 // Prioritize batches first (they're larger, start them early)
                 while ($availableSlots > 0 && $nextBatchIndex < $totalBatches) {
                     $batch = $batches[$nextBatchIndex++];
-                    $transfer = $this->createBatchTransfer($adminAjaxUrl, $key, $batch, $outputDir);
+                    $transfer = $this->createBatchTransfer($adminAjaxUrl, $key, $batch, $filesOutputDir);
                     $handle = $transfer['handle'];
                     curl_multi_add_handle($multi, $handle);
                     $active[(int) $handle] = $transfer;
@@ -79,7 +79,7 @@ class ConcurrentDownloader
                 // Fill remaining slots with file transfers
                 while ($availableSlots > 0 && $nextFileIndex < $totalFiles) {
                     $fileEntry = $largeFiles[$nextFileIndex++];
-                    $transfer = $this->createFileTransfer($adminAjaxUrl, $key, $fileEntry, $outputDir);
+                    $transfer = $this->createFileTransfer($adminAjaxUrl, $key, $fileEntry, $filesOutputDir);
                     $handle = $transfer['handle'];
                     curl_multi_add_handle($multi, $handle);
                     $active[(int) $handle] = $transfer;
@@ -224,10 +224,8 @@ class ConcurrentDownloader
      * @param callable        $progressCallback Progress callback
      * @return array Transfer info
      */
-    public function createDatabaseTransfer(string $adminAjaxUrl, string $key, string $outputDir, callable $progressCallback): array
+    public function createDatabaseTransfer(string $adminAjaxUrl, string $key, string $destPath, callable $progressCallback): array
     {
-        $normalizedBase = rtrim($outputDir, '\\/');
-        $destPath = $normalizedBase === '' ? 'db.sql' : $normalizedBase . DIRECTORY_SEPARATOR . 'db.sql';
         FileOperations::ensureParentDir($destPath);
 
         $fp = fopen($destPath, 'wb');
@@ -263,7 +261,7 @@ class ConcurrentDownloader
      * @param string $outputDir    Output directory
      * @return array Transfer info with handle, fp, temp_path, batch, type
      */
-    private function createBatchTransfer(string $adminAjaxUrl, string $key, array $batch, string $outputDir): array
+    private function createBatchTransfer(string $adminAjaxUrl, string $key, array $batch, string $filesOutputDir): array
     {
         // Create temp file for ZIP download
         $tempZip = tempnam(sys_get_temp_dir(), 'localpoc-batch');
@@ -302,7 +300,7 @@ class ConcurrentDownloader
             'temp_path' => $tempZip,
             'batch'     => $batch,
             'type'      => 'batch',
-            'output_dir' => $outputDir,
+            'output_dir' => $filesOutputDir,
         ];
     }
 
@@ -315,17 +313,21 @@ class ConcurrentDownloader
      * @param string $outputDir    Output directory
      * @return array Transfer info
      */
-    private function createFileTransfer(string $adminAjaxUrl, string $key, array $fileEntry, string $outputDir): array
+    private function createFileTransfer(string $adminAjaxUrl, string $key, array $fileEntry, string $filesOutputDir): array
     {
         if (!isset($fileEntry['path']) || !is_string($fileEntry['path']) || $fileEntry['path'] === '') {
             throw new RuntimeException('Manifest entry is missing the file path.');
         }
 
         $relativePath = ltrim(str_replace('\\', '/', $fileEntry['path']), '/');
-        $normalizedBase = rtrim($outputDir, '\\/');
-        $localPath = $normalizedBase === ''
-            ? str_replace('/', DIRECTORY_SEPARATOR, $relativePath)
-            : $normalizedBase . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relativePath);
+        if (!str_starts_with($relativePath, 'wp-content')) {
+            throw new RuntimeException('File path is outside wp-content scope: ' . $relativePath);
+        }
+        $relativeWithinContent = ltrim(substr($relativePath, strlen('wp-content')), '/');
+        $normalizedBase = rtrim($filesOutputDir, '\\/');
+        $localPath = $relativeWithinContent === ''
+            ? $normalizedBase
+            : $normalizedBase . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relativeWithinContent);
 
         FileOperations::ensureParentDir($localPath);
 

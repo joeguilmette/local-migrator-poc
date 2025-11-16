@@ -28,6 +28,13 @@ class LocalPOC_File_Scanner {
             return false;
         }
 
+        if (!str_starts_with($relative, 'wp-content')) {
+            return true;
+        }
+
+        // Normalize path segment after wp-content/
+        $relative_without_root = ltrim(substr($relative, strlen('wp-content')), '/');
+
         $basename = basename($relative);
 
         // Exclude file patterns
@@ -45,13 +52,13 @@ class LocalPOC_File_Scanner {
         }
 
         // Exclude cache and backup directories (exact match or with trailing slash)
-        $relative_lower = strtolower($relative);
+        $relative_lower = strtolower($relative_without_root);
         $dir_prefixes = [
-            'wp-content/cache',
-            'wp-content/uploads/cache',
-            'wp-content/updraft',
-            'wp-content/ai1wm-backups',
-            'wp-content/backups',
+            'cache',
+            'uploads/cache',
+            'updraft',
+            'ai1wm-backups',
+            'backups',
         ];
         foreach ($dir_prefixes as $prefix) {
             // Match if path equals prefix or starts with prefix + '/'
@@ -68,8 +75,8 @@ class LocalPOC_File_Scanner {
 
         // Exclude vendor directories under wp-content/plugins|themes/*/vendor
         $segments = explode('/', $relative_lower);
-        if (count($segments) >= 4 && $segments[0] === 'wp-content' && in_array($segments[1], ['plugins', 'themes'], true)) {
-            if ($segments[3] === 'vendor' || $segments[2] === 'vendor') {
+        if (count($segments) >= 3 && in_array($segments[0], ['plugins', 'themes'], true)) {
+            if ($segments[2] === 'vendor' || $segments[1] === 'vendor') {
                 return true;
             }
         }
@@ -83,7 +90,14 @@ class LocalPOC_File_Scanner {
      * @return array Array of file info: ['path' => string, 'size' => int, 'mtime' => int]
      */
     public static function scan_file_list() {
-        $root_path = function_exists('untrailingslashit') ? untrailingslashit(ABSPATH) : rtrim(ABSPATH, '/\\');
+        $abs_root = function_exists('untrailingslashit') ? untrailingslashit(ABSPATH) : rtrim(ABSPATH, '/\\');
+        $wp_content_root = $abs_root . DIRECTORY_SEPARATOR . 'wp-content';
+
+        if (!is_dir($wp_content_root) || !is_readable($wp_content_root)) {
+            return [];
+        }
+
+        $root_path = $wp_content_root;
         $files = [];
 
         $directory_iterator = new RecursiveDirectoryIterator(
@@ -93,9 +107,13 @@ class LocalPOC_File_Scanner {
 
         $filtered_iterator = new RecursiveCallbackFilterIterator(
             $directory_iterator,
-            function ($current) use ($root_path) {
+            function ($current) use ($root_path, $abs_root) {
                 $full_path = $current->getPathname();
-                $relative = ltrim(str_replace('\\', '/', substr($full_path, strlen($root_path))), '/');
+                $relative_from_abs = ltrim(str_replace('\\', '/', substr($full_path, strlen($abs_root))), '/');
+                if (!str_starts_with($relative_from_abs, 'wp-content')) {
+                    return false;
+                }
+                $relative = ltrim($relative_from_abs, '/');
                 return !self::should_exclude_path($relative, $current->isDir());
             }
         );
@@ -111,7 +129,11 @@ class LocalPOC_File_Scanner {
             }
 
             $full_path = $file_info->getPathname();
-            $relative = ltrim(str_replace('\\', '/', substr($full_path, strlen($root_path))), '/');
+            $relative_from_abs = ltrim(str_replace('\\', '/', substr($full_path, strlen($abs_root))), '/');
+            if (!str_starts_with($relative_from_abs, 'wp-content')) {
+                continue;
+            }
+            $relative = ltrim($relative_from_abs, '/');
             if (self::should_exclude_path($relative)) {
                 continue;
             }

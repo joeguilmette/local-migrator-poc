@@ -17,3 +17,9 @@ cli/.box.cache
 
 .localbackup/
 local-backup/
+
+# Download workspaces and archives
+.tmp/
+archives/
+local-backup/.tmp/
+local-backup/archives/

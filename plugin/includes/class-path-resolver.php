@@ -28,6 +28,17 @@ class LocalPOC_Path_Resolver {
     }
 
     /**
+     * Checks if path resides within wp-content
+     *
+     * @param string $relative_path Relative path
+     * @return bool True if within wp-content
+     */
+    public static function is_within_wp_content($relative_path) {
+        $relative = self::normalize_relative_path($relative_path);
+        return $relative === 'wp-content' || str_starts_with($relative, 'wp-content/');
+    }
+
+    /**
      * Resolves and validates a relative path against ABSPATH
      *
      * Prevents directory traversal attacks and ensures the file
@@ -38,12 +49,20 @@ class LocalPOC_Path_Resolver {
      */
     public static function resolve_relative_path($relative_path) {
         $relative_path = (string) $relative_path;
-        $relative = ltrim(str_replace('\\', '/', $relative_path), '/');
+        $relative = self::normalize_relative_path($relative_path);
         if ($relative === '') {
             return new WP_Error(
                 'localpoc_invalid_path',
                 __('Invalid file path.', 'localpoc'),
                 ['status' => 400]
+            );
+        }
+
+        if (!self::is_within_wp_content($relative)) {
+            return new WP_Error(
+                'localpoc_out_of_scope',
+                __('File path outside wp-content/ is not allowed.', 'localpoc'),
+                ['status' => 403]
             );
         }
 

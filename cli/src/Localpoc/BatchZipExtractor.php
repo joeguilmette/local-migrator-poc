@@ -115,6 +115,18 @@ class BatchZipExtractor
                 continue;
             }
 
+            // Strip wp-content prefix since output dir already points there
+            if ($normalized === 'wp-content') {
+                continue;
+            }
+            if (str_starts_with($normalized, 'wp-content/')) {
+                $normalized = substr($normalized, strlen('wp-content/'));
+            }
+
+            if ($normalized === '') {
+                continue;
+            }
+
             $target = $base . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $normalized);
 
             // Handle directories

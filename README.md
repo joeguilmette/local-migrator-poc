@@ -66,9 +66,10 @@ localpoc download \
 
 On success, LocalPOC will:
 
-* Stream the database into `<output>/db.sql`.
-* Mirror the remote file tree under `<output>/`.
-* Print a summary of successes and failures.
+* Stream all `wp-content/` files plus the database into a temporary workspace.
+* Build a single ZIP archive at `<output>/archives/<domain>-<YYYYmmdd-HHMMSS>.zip`.
+  * The archive contains `wp-content/` (with the full tree) and `db.sql` at the root.
+* Remove the workspace and print the final archive path plus transfer stats.
 
 Exit codes:
 

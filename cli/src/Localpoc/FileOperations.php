@@ -81,4 +81,46 @@ class FileOperations
 
         return 0;
     }
+
+    /**
+     * Recursively deletes a directory tree
+     */
+    public static function recursiveDelete(string $path): void
+    {
+        if (!file_exists($path)) {
+            return;
+        }
+
+        if (is_file($path) || is_link($path)) {
+            @unlink($path);
+            return;
+        }
+
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($path, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::CHILD_FIRST
+        );
+
+        foreach ($iterator as $item) {
+            if ($item->isDir()) {
+                @rmdir($item->getPathname());
+            } else {
+                @unlink($item->getPathname());
+            }
+        }
+
+        @rmdir($path);
+    }
+
+    /**
+     * Ensures the archives directory exists and returns its path
+     */
+    public static function ensureZipDirectory(string $baseOutput): string
+    {
+        self::ensureOutputDir($baseOutput);
+        $normalized = rtrim($baseOutput, '\\/');
+        $archives = $normalized . DIRECTORY_SEPARATOR . 'archives';
+        self::ensureOutputDir($archives);
+        return $archives;
+    }
 }
