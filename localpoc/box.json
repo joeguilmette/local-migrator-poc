@@ -1,0 +1,13 @@
+{
+  "main": "bin/localpoc",
+  "output": "dist/localpoc.phar",
+  "chmod": "0755",
+  "stub": true,
+  "compression": "GZ",
+  "exclude": [
+    "dist/*",
+    "windows/*",
+    "README.md",
+    "box.json"
+  ]
+}
