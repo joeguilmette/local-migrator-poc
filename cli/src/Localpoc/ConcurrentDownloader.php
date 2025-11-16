@@ -277,17 +277,16 @@ class ConcurrentDownloader
             throw new RuntimeException('Unable to open temp file for writing: ' . $tempZip);
         }
 
-        // Build POST params
+        // Build POST params (JSON body)
         $paths = array_column($batch, 'path');
         $params = [
-            'action' => 'localpoc_files_batch_zip',
-            'paths'  => $paths,
-            'localpoc_key' => $key,
+            'paths' => $paths,
         ];
+        $endpoint = $adminAjaxUrl . '?action=localpoc_files_batch_zip';
 
         // Create streaming handle with write callback
         $handle = Http::createStreamHandle(
-            $adminAjaxUrl,
+            $endpoint,
             $params,
             $key,
             $fp,
