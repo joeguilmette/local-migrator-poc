@@ -132,15 +132,6 @@ Optionally supply a release-notes file as the second argument:
 
 The script installs Composer dependencies, builds the PHAR with Box, and runs `gh release create` with `cli/dist/localpoc.phar` attached as the release asset.
 
-### Publish the plugin ZIP to a release
-
-Package the `plugin/` directory and upload it as a release asset (release must already exist or the script will create one):
-
-```bash
-cd /path/to/localpenis
-./scripts/release-plugin.sh v0.1.0
-```
-
 Provide a notes file as the second argument to override the default release notes. If the release already exists, the script uploads `localpoc-plugin-v0.1.0.zip` via `gh release upload --clobber`.
 
 ---

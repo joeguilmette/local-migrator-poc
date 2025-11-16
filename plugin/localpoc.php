@@ -3,7 +3,7 @@
  * Plugin Name: Local Migrator
  * Plugin URI: https://example.com/localpoc
  * Description: Exposes an API for downloading WordPress sites via a local CLI utility.
- * Version: 0.0.1
+ * Version: 0.0.4
  * Author: Your Name
  * Author URI: https://example.com
  * License: GPL v2 or later
@@ -17,7 +17,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('LOCALPOC_VERSION', '0.0.1');
+define('LOCALPOC_VERSION', '0.0.4');
 define('LOCALPOC_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('LOCALPOC_PLUGIN_URL', plugin_dir_url(__FILE__));
 
