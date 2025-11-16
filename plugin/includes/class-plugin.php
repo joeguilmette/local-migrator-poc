@@ -30,6 +30,9 @@ class LocalPOC_Plugin {
         // Register admin menu
         add_action('admin_menu', [__CLASS__, 'register_admin_menu']);
 
+        // Handle activation redirect
+        add_action('admin_init', [__CLASS__, 'activation_redirect']);
+
         // Register AJAX endpoints (logged-in + unauthenticated)
         add_action('wp_ajax_localpoc_files_manifest', [LocalPOC_Ajax_Handlers::class, 'files_manifest']);
         add_action('wp_ajax_nopriv_localpoc_files_manifest', [LocalPOC_Ajax_Handlers::class, 'files_manifest']);
@@ -72,6 +75,36 @@ class LocalPOC_Plugin {
             $access_key = wp_generate_password(32, false);
             update_option(self::OPTION_ACCESS_KEY, $access_key);
         }
+    }
+
+    /**
+     * Called on plugin activation
+     */
+    public static function on_activation() {
+        // Set transient to trigger redirect
+        set_transient('localpoc_activation_redirect', true, 30);
+    }
+
+    /**
+     * Redirects to plugin admin page after activation
+     */
+    public static function activation_redirect() {
+        // Check if we should redirect
+        if (!get_transient('localpoc_activation_redirect')) {
+            return;
+        }
+
+        // Delete the transient
+        delete_transient('localpoc_activation_redirect');
+
+        // Don't redirect if activating multiple plugins
+        if (isset($_GET['activate-multi'])) {
+            return;
+        }
+
+        // Redirect to plugin admin page
+        wp_safe_redirect(admin_url('admin.php?page=localpoc-downloader'));
+        exit;
     }
 
     /**

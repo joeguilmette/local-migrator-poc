@@ -65,6 +65,8 @@ class DownloadOrchestrator
                 'reported_bytes'  => 0,
                 'estimated_bytes' => (int) ($dbJobInfo['estimated_bytes'] ?? 0),
                 'done'            => false,
+                'total_tables'    => (int) ($dbJobInfo['total_tables'] ?? 0),
+                'total_rows'      => (int) ($dbJobInfo['total_rows'] ?? 0),
             ];
             $dbJobFinished = false;
 
@@ -85,7 +87,8 @@ class DownloadOrchestrator
                 $this->progressTracker->incrementDbBytes($delta);
             };
 
-            $pollDbJob = function (bool $force = false) use (&$dbJobState, &$lastDbPoll, $adminAjaxUrl, $key, $dbJobId, $reportDbProgress): void {
+            $lastDbLog = 0.0;
+            $pollDbJob = function (bool $force = false) use (&$dbJobState, &$lastDbPoll, &$lastDbLog, $adminAjaxUrl, $key, $dbJobId, $reportDbProgress): void {
                 if ($dbJobState['done']) {
                     return;
                 }
@@ -103,7 +106,43 @@ class DownloadOrchestrator
                     $reportDbProgress($newBytes);
                 }
 
-                if (!empty($progress['done'])) {
+                $completed = (int) ($progress['completed_tables'] ?? 0);
+                $totalTables = $dbJobState['total_tables'];
+                $estimated = $dbJobState['estimated_bytes'];
+                $bytesWritten = $dbJobState['bytes_written'];
+                $fileSize = (int) ($progress['file_size'] ?? 0);
+                $doneFlag = !empty($progress['done']);
+                $nowLog = microtime(true);
+                if ($nowLog - $lastDbLog >= 1.0) {
+                    $lastDbLog = $nowLog;
+                    $this->info(sprintf(
+                        '[debug] DB chunk -> tables %d/%d, bytes %s/%s, file %s, done=%s',
+                        $completed,
+                        $totalTables,
+                        $this->formatBytes($bytesWritten),
+                        $this->formatBytes($estimated),
+                        $this->formatBytes($fileSize),
+                        $doneFlag ? 'yes' : 'no'
+                    ));
+                }
+
+                if (!empty($progress['warnings'])) {
+                    foreach ((array) $progress['warnings'] as $warning) {
+                        $this->info('[debug] DB warning: ' . $warning);
+                    }
+                }
+
+                if (!empty($progress['last_table']) && !empty($progress['last_batch_rows'])) {
+                    $this->info(sprintf('[debug] DB batch: %s rows=%d', $progress['last_table'], (int) $progress['last_batch_rows']));
+                }
+
+                if ($doneFlag) {
+                    $this->info(sprintf(
+                        '[debug] DB job complete -> bytes %s file %s (%d rows)',
+                        $this->formatBytes($bytesWritten),
+                        $this->formatBytes($fileSize),
+                        $dbJobState['total_rows']
+                    ));
                     $dbJobState['done'] = true;
                 }
             };
@@ -191,13 +230,29 @@ class DownloadOrchestrator
             }
 
             $this->info('Database export complete. Downloading SQL file...');
+            $downloadedBytes = 0;
             DatabaseJobClient::downloadDatabase(
                 $adminAjaxUrl,
                 $key,
                 $dbJobId,
                 $dbPath,
-                null
+                function (int $bytes) use (&$downloadedBytes): void {
+                    $downloadedBytes += $bytes;
+                }
             );
+            if (file_exists($dbPath)) {
+                $hashValue = sha1_file($dbPath) ?: 'n/a';
+                $this->info(sprintf(
+                    '[debug] DB download size: %s (sha1 %s)',
+                    $this->formatBytes($downloadedBytes),
+                    $hashValue
+                ));
+            } else {
+                $this->info(sprintf(
+                    '[debug] DB download size: %s (file missing!)',
+                    $this->formatBytes($downloadedBytes)
+                ));
+            }
             DatabaseJobClient::finishJob($adminAjaxUrl, $key, $dbJobId);
             $dbJobFinished = true;
             $this->info('Database downloaded successfully.');
