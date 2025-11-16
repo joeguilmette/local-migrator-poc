@@ -4,10 +4,13 @@
   "chmod": "0755",
   "stub": true,
   "compression": "GZ",
-  "exclude": [
-    "dist/*",
-    "windows/*",
-    "README.md",
-    "box.json"
+  "directories": [
+    "bin",
+    "src",
+    "vendor"
+  ],
+  "files": [
+    "composer.json",
+    "composer.lock"
   ]
 }

@@ -1,73 +1,107 @@
 # LocalPOC – WordPress Download POC
 
-LocalPOC pairs a WordPress plugin (`plugin/localpoc.php`) with a cross-platform CLI (`cli/`) to download entire WordPress sites through authenticated REST endpoints. Install the plugin on a site to generate a CLI command, then run that command locally to pull files and the database via parallel transfers.
+LocalPOC has two parts:
 
-> **Quick CLI Install**
-> 1. `cd cli`
-> 2. `composer install`
-> 3. `composer global require humbug/box`
-> 4. `vendor/bin/box compile`
-> 5. `sudo mv dist/localpoc.phar /usr/local/bin/localpoc && sudo chmod +x /usr/local/bin/localpoc`
-> 6. `localpoc download --url=https://example.com --key=SECRET --output=./backup`
+- A WordPress plugin (`plugin/localpoc.php`) that exposes authenticated REST endpoints.
+- A CLI (`localpoc`), packaged as a PHAR, that connects to the plugin and downloads the site (files + database) efficiently.
 
-## Repository Layout
-```
-plugin/                 # WordPress plugin powering the REST endpoints
-cli/                    # PHP CLI packaged as a PHAR
-```
+You install the plugin on a site, copy the command it shows you, and run that command locally.
 
-## Requirements
-- PHP ^8.0 with the cURL extension
-- Composer
-- [Box](https://github.com/box-project/box) for building the PHAR
-- A WordPress site with the LocalPOC plugin installed
+---
 
-## Plugin Setup
-1. Copy `plugin/localpoc.php` into a WordPress installation as a plugin and activate it.
-2. Visit the “Site Downloader” admin menu to read the site URL, access key, and example CLI command.
-3. Keep the command handy for the CLI step below.
+## 1. Install the CLI (PHAR)
 
-## CLI Build Steps
-1. `cd cli`
-2. `composer install`
-3. `composer global require humbug/box`
-4. `vendor/bin/box compile`
+### macOS / Linux
 
-The compiled artifact is `cli/dist/localpoc.phar`.
+1. Download the latest PHAR from GitHub Releases:
 
-## CLI Installation Options
-### PHAR (recommended)
+   ```bash
+   curl -L "https://github.com/joeguilmette/local-migrator-poc/releases/latest/download/localpoc.phar" -o localpoc
+````
+
+2. Make it executable and put it on your `PATH`:
+
+   ```bash
+   chmod +x localpoc
+   sudo mkdir -p /usr/local/bin
+   sudo mv localpoc /usr/local/bin/localpoc
+   ```
+
+3. Check it’s available:
+
+   ```bash
+   localpoc --help
+   ```
+
+If that prints usage, the CLI is installed.
+
+> Windows: save `localpoc.phar` somewhere and run it as `php localpoc.phar ...` or create a small `.bat` wrapper; details are left to the user.
+
+---
+
+## 2. Install the WordPress plugin
+
+1. Install and activate `plugin/localpoc.php` in your WordPress install.
+
+2. A “LocalPOC” / “Site Downloader” menu item will appear in the admin. Open it:
+
+   * It shows the **Site URL**.
+   * It shows the **Access Key**.
+   * It shows a ready‑to‑run CLI command.
+
+Copy that command; you’ll use it in the next step.
+
+---
+
+## 3. Run a download
+
+Basic command:
+
 ```bash
-sudo mv cli/dist/localpoc.phar /usr/local/bin/localpoc
-sudo chmod +x /usr/local/bin/localpoc
-```
-
-### Composer Global (developer convenience)
-```bash
-composer global config repositories.localpoc path $(pwd)/cli
-composer global require localpoc/localpoc:dev-main
-```
-Ensure Composer's global `vendor/bin` directory is on your `PATH` to invoke `localpoc` anywhere.
-
-### Windows
-Place `cli/dist/localpoc.phar` and `cli/windows/localpoc.bat` in a directory on your `PATH` (update the `.bat` file if `php.exe` lives elsewhere).
-
-## Usage
-```
 localpoc download --url=<URL> --key=<KEY> [--output=<DIR>] [--concurrency=<N>]
 ```
-- `--url` The WordPress site base URL (required)
-- `--key` The plugin-provided access key (required)
-- `--output` Destination directory (defaults to `./local-backup`)
-- `--concurrency` Parallel download count (defaults to 4)
 
-The CLI reports progress for the manifest, database stream, and concurrent file downloads. Final output summarizes the database export path, number of files downloaded, and any failures.
+* `--url`          Site base URL (from the plugin page), e.g. `https://example.com`
+* `--key`          Access key (from the plugin page)
+* `--output`       Local destination directory (default: `./local-backup`)
+* `--concurrency`  Number of parallel file downloads (default: `4`)
 
-## Uninstall
-- PHAR: `sudo rm /usr/local/bin/localpoc`
-- Composer global: `composer global remove localpoc/localpoc`
-- Windows: delete the `.phar` and `.bat` from your PATH directory.
+Example:
 
-## Development Notes
-- Exit codes: `0` success, `2` usage error, `3` network/HTTP failure, `4` internal error.
-- The CLI mirrors the remote file tree under the `--output` directory and streams the database export into `db.sql` within that directory.
+```bash
+localpoc download \
+  --url="https://example.com" \
+  --key="ACCESS_KEY_FROM_PLUGIN" \
+  --output="./example-backup"
+```
+
+On success, LocalPOC will:
+
+* Stream the database into `<output>/db.sql`.
+* Mirror the remote file tree under `<output>/`.
+* Print a summary of successes and failures.
+
+Exit codes:
+
+* `0` – success
+* `2` – bad or missing arguments
+* `3` – HTTP / network error
+* `4` – internal error
+
+---
+
+## 4. Uninstall
+
+* Remove the CLI:
+
+  ```bash
+  sudo rm /usr/local/bin/localpoc
+  ```
+
+* Remove the plugin:
+
+  * Deactivate it from the WordPress Plugins screen.
+  * Delete `wp-content/plugins/localpoc/`.
+
+```
+```
