@@ -111,7 +111,7 @@ class ArchiveBuilder
 
         foreach ($iterator as $fileInfo) {
             $fullPath = $fileInfo->getPathname();
-            $relative = $relativeRoot . '/' . ltrim(str_replace('\', '/', substr($fullPath, strlen($path))), '/');
+            $relative = $relativeRoot . '/' . ltrim(str_replace('\\', '/', substr($fullPath, strlen($path))), '/');
 
             if ($fileInfo->isDir()) {
                 $zip->addEmptyDir($relative);
