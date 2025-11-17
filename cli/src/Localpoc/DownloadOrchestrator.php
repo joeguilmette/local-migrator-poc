@@ -51,6 +51,15 @@ class DownloadOrchestrator
         $zipPath = null;
         $dbJobId = null;
         $dbJobFinished = false;
+        $streamState = null;
+        $dbJobState = [
+            'bytes_written' => 0,
+            'rows_processed' => 0,
+            'total_rows' => 0,
+            'total_tables' => 0,
+            'done' => false,
+            'streaming' => false,
+        ];
 
         try {
             $workspace = ArchiveBuilder::createTempWorkspace($outputDir);
@@ -73,19 +82,59 @@ class DownloadOrchestrator
             $useStreaming = true; // For POC, always use streaming
 
             if ($useStreaming) {
-                // Initialize streaming client
-                $streamClient = new StreamingDatabaseClient(Http::client(), $url, $key);
-                $dbJobState = [
-                    'done' => false,
-                    'total_tables' => 0,
-                    'total_rows' => 0,
-                    'rows_processed' => 0,
-                    'bytes_written' => 0,
-                    'streaming' => true
+                $this->debug('Using streaming database export');
+
+                $streamClient = new StreamingDatabaseClient($url, $key);
+                $streamInit = $streamClient->initStream([
+                    'chunk_size' => 2000,
+                    'compression' => 'gzip'
+                ]);
+
+                $sqlHeader = base64_decode($streamInit['sql_header'], true);
+                if ($sqlHeader === false) {
+                    throw new RuntimeException('Failed to decode database stream header.');
+                }
+
+                $streamHandle = fopen($dbPath, 'wb');
+                if ($streamHandle === false) {
+                    throw new RuntimeException('Unable to open temporary database file for streaming.');
+                }
+
+                if (fwrite($streamHandle, $sqlHeader) === false) {
+                    fclose($streamHandle);
+                    throw new RuntimeException('Failed to write database stream header to file.');
+                }
+
+                $streamState = [
+                    'client' => $streamClient,
+                    'cursor' => $streamInit['cursor'],
+                    'options' => [
+                        'time_budget' => 5,
+                        'compression' => 'gzip'
+                    ],
+                    'handle' => $streamHandle,
+                    'metadata' => $streamInit['metadata'],
+                    'bytes_written' => strlen($sqlHeader),
+                    'rows_sent' => 0,
+                    'chunks' => 0,
+                    'done' => false
                 ];
 
-                // We'll handle streaming in a separate thread-like approach below
-                $this->debug('Using streaming database export');
+                $dbJobState = [
+                    'bytes_written'   => $streamState['bytes_written'],
+                    'rows_processed'  => 0,
+                    'total_tables'    => (int) ($streamInit['metadata']['total_tables'] ?? 0),
+                    'total_rows'      => (int) ($streamInit['metadata']['total_rows'] ?? 0),
+                    'done'            => false,
+                    'streaming'       => true
+                ];
+
+                if ($dbJobState['total_tables'] === 0) {
+                    $dbJobState['done'] = true;
+                    $streamState['done'] = true;
+                    fclose($streamHandle);
+                    $streamState['handle'] = null;
+                }
             } else {
                 // Legacy job-based export (kept for compatibility)
                 $dbJobInfo = DatabaseJobClient::initJob($adminAjaxUrl, $key);
@@ -121,10 +170,70 @@ class DownloadOrchestrator
 
             // For streaming, we'll handle DB export differently
             if ($dbJobState['streaming']) {
-                // Start streaming in background (we'll do it synchronously after files for POC)
-                $pollDbJob = function (bool $force = false) use (&$dbJobState): void {
-                    // No-op for streaming mode during file download
-                    // We'll stream the database after file collection
+                $pollDbJob = function (bool $force = false) use (&$streamState, &$dbJobState, &$lastDbPoll): void {
+                    if ($dbJobState['done']) {
+                        return;
+                    }
+
+                    $now = microtime(true);
+                    if (!$force && ($now - $lastDbPoll) < 0.25) {
+                        return;
+                    }
+                    $lastDbPoll = $now;
+
+                    $chunk = $streamState['client']->fetchChunk(
+                        $streamState['cursor'],
+                        $streamState['options']
+                    );
+
+                    if (!is_resource($streamState['handle'])) {
+                        throw new RuntimeException('Database stream handle is unavailable.');
+                    }
+
+                    if ($chunk['sql'] !== '') {
+                        if (fwrite($streamState['handle'], $chunk['sql']) === false) {
+                            throw new RuntimeException('Failed to write streamed database chunk to file.');
+                        }
+                    }
+
+                    $streamState['cursor'] = $chunk['cursor'];
+                    $streamState['chunks']++;
+
+                    $rowsInChunk = (int) ($chunk['progress']['rows_in_chunk'] ?? 0);
+                    $bytesInChunk = strlen($chunk['sql']);
+
+                    $streamState['rows_sent'] += $rowsInChunk;
+                    $streamState['bytes_written'] += $bytesInChunk;
+
+                    $dbJobState['rows_processed'] = $streamState['rows_sent'];
+                    $dbJobState['bytes_written'] = $streamState['bytes_written'];
+
+                    $this->progress->dbRowsProcessed = $streamState['rows_sent'];
+                    $this->progress->bytesTransferred += $bytesInChunk;
+
+                    $tablesTotal = (int) ($streamState['metadata']['total_tables'] ?? 0);
+                    $tablesCompleted = (int) ($chunk['progress']['tables_completed'] ?? 0);
+                    $currentTable = (string) ($chunk['progress']['current_table'] ?? 'unknown');
+                    $currentIndex = $tablesTotal > 0 ? min($tablesCompleted + 1, $tablesTotal) : ($tablesCompleted + 1);
+
+                    $this->progress->currentActivity = sprintf(
+                        'Streaming table %d/%d: %s',
+                        $currentIndex,
+                        $tablesTotal,
+                        $currentTable
+                    );
+
+                    if ($this->shouldRender()) {
+                        $this->updateRenderer();
+                    }
+
+                    if (!empty($chunk['is_complete'])) {
+                        if (is_resource($streamState['handle'])) {
+                            fclose($streamState['handle']);
+                            $streamState['handle'] = null;
+                        }
+                        $dbJobState['done'] = true;
+                    }
                 };
             } else {
                 // Legacy polling for job-based export
@@ -300,43 +409,15 @@ class DownloadOrchestrator
 
             // Handle database export based on mode
             if ($dbJobState['streaming']) {
-                // Stream database directly to file
-                $this->info('Streaming database to file...');
+                $this->info('Finalizing database stream...');
                 $this->progress->currentActivity = 'Streaming database';
                 $this->updateRenderer();
 
-                $streamClient->streamToFile($dbPath, [
-                    'chunk_size' => 2000,
-                    'time_budget' => 10
-                ], function(array $progress) use (&$dbJobState): void {
-                    // Update progress from streaming
-                    $this->progress->dbRowsProcessed = $progress['rows_sent'] ?? 0;
-                    $this->progress->dbTotalRows = $progress['total_tables'] * 1000; // Estimate
-                    $this->progress->bytesTransferred += $progress['bytes_sent'] ?? 0;
+                while (!$dbJobState['done']) {
+                    $pollDbJob(true);
+                    usleep(100000);
+                }
 
-                    $this->progress->currentActivity = sprintf(
-                        'Streaming table %d/%d: %s',
-                        ($progress['tables_completed'] ?? 0) + 1,
-                        $progress['total_tables'] ?? 0,
-                        $progress['current_table'] ?? 'unknown'
-                    );
-
-                    if ($this->shouldRender()) {
-                        $this->updateRenderer();
-                    }
-
-                    // Log progress
-                    if (!empty($progress['current_table']) && !empty($progress['rows_sent'])) {
-                        $this->debug(sprintf(
-                            'Streaming: Table %s, %d rows, chunk #%d',
-                            $progress['current_table'],
-                            $progress['rows_sent'],
-                            $progress['chunk_count'] ?? 0
-                        ));
-                    }
-                });
-
-                $dbJobState['done'] = true;
                 $this->info('Database streamed successfully.');
 
                 if (file_exists($dbPath)) {
@@ -454,6 +535,10 @@ class DownloadOrchestrator
                 } catch (\Throwable $ignored) {
                     // ignore cleanup errors
                 }
+            }
+            if ($streamState && isset($streamState['handle']) && is_resource($streamState['handle'])) {
+                fclose($streamState['handle']);
+                $streamState['handle'] = null;
             }
             if ($workspace !== null) {
                 ArchiveBuilder::cleanupWorkspace($workspace);

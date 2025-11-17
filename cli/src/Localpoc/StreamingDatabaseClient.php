@@ -7,12 +7,10 @@ use RuntimeException;
 
 class StreamingDatabaseClient {
 
-    private Http $http;
     private string $siteUrl; // base site URL (e.g. https://example.com), not the admin-ajax path
     private string $accessKey;
 
-    public function __construct(Http $http, string $siteUrl, string $accessKey) {
-        $this->http = $http;
+    public function __construct(string $siteUrl, string $accessKey) {
         $this->siteUrl = rtrim($siteUrl, '/');
         $this->accessKey = $accessKey;
     }
@@ -31,9 +29,7 @@ class StreamingDatabaseClient {
             'compression' => $options['compression'] ?? 'gzip'
         ];
 
-        $response = $this->http->postJson($url, $params, [
-            'X-Localpoc-Key' => $this->accessKey
-        ]);
+        $response = Http::postJson($url, $params, $this->accessKey);
 
         if (empty($response['success']) || !isset($response['data'])) {
             $message = '';
@@ -64,9 +60,7 @@ class StreamingDatabaseClient {
             'compression' => $options['compression'] ?? 'gzip'
         ];
 
-        $response = $this->http->postJson($url, $params, [
-            'X-Localpoc-Key' => $this->accessKey
-        ]);
+        $response = Http::postJson($url, $params, $this->accessKey);
 
         if (empty($response['success']) || !isset($response['data'])) {
             $message = '';

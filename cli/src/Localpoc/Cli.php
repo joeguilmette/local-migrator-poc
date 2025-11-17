@@ -12,7 +12,7 @@ use Localpoc\UI\TerminalRenderer;
  */
 class Cli
 {
-    private const VERSION = '0.0.27';
+    private const VERSION = '0.0.28';
 
     private const DEFAULT_OUTPUT = './local-backup';
     private const DEFAULT_CONCURRENCY = 4;
