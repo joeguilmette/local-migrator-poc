@@ -11,7 +11,7 @@ class HttpException extends RuntimeException
 
 class Http
 {
-    private const USER_AGENT = 'localpoc-cli/0.1';
+    private const USER_AGENT = 'local-migrator-cli/0.1';
 
     public static function buildAdminAjaxUrl(string $siteUrl): string
     {

@@ -1,0 +1,283 @@
+/* Local Migrator Admin Styles */
+
+.localpoc-admin {
+  max-width: 1200px;
+  margin: 20px 20px 0 0;
+}
+
+.localpoc-admin h1 {
+  font-size: 23px;
+  font-weight: 400;
+  line-height: 1.3;
+  margin: 0 0 20px;
+  padding: 9px 0 4px 0;
+  color: #1d2327;
+}
+
+/* Card Styles */
+.localpoc-admin .lm-card {
+  background: #fff;
+  border: 1px solid #c3c4c7;
+  border-radius: 2px;
+  margin-bottom: 20px;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+  position: relative;
+}
+
+.localpoc-admin .lm-card h2 {
+  margin: 0;
+  padding: 15px 20px;
+  border-bottom: 1px solid #c3c4c7;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #1d2327;
+  background: #f8f9fa;
+}
+
+.localpoc-admin .lm-card .lm-card-body {
+  padding: 20px;
+}
+
+/* Form Table Styles */
+.localpoc-admin .lm-card .form-table {
+  margin: 0;
+  width: 100%;
+}
+
+.localpoc-admin .lm-card .form-table th {
+  padding: 15px 10px 15px 0;
+  width: 200px;
+  font-weight: 600;
+  color: #1d2327;
+  vertical-align: top;
+}
+
+.localpoc-admin .lm-card .form-table td {
+  padding: 15px 10px;
+  vertical-align: top;
+}
+
+.localpoc-admin .lm-card .form-table tr:first-child th,
+.localpoc-admin .lm-card .form-table tr:first-child td {
+  padding-top: 0;
+}
+
+/* Code and Pre Styles */
+.localpoc-admin .lm-card code {
+  padding: 3px 5px 2px;
+  margin: 0 1px;
+  background: #f0f0f1;
+  border-radius: 3px;
+  font-size: 13px;
+  font-family: Consolas, Monaco, monospace;
+  color: #2271b1;
+  word-break: break-all;
+}
+
+.localpoc-admin .lm-card pre {
+  margin: 15px 0;
+  padding: 15px;
+  border-radius: 3px;
+  overflow-x: auto;
+  background: #f6f7f7;
+  border: 1px solid #dcdcde;
+  font-family: Consolas, Monaco, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #1d2327;
+  white-space: pre;
+  word-wrap: normal;
+  max-width: 100%;
+}
+
+.localpoc-admin .lm-card pre::-webkit-scrollbar {
+  height: 8px;
+}
+
+.localpoc-admin .lm-card pre::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+.localpoc-admin .lm-card pre::-webkit-scrollbar-thumb {
+  background: #c3c4c7;
+  border-radius: 3px;
+}
+
+.localpoc-admin .lm-card pre::-webkit-scrollbar-thumb:hover {
+  background: #8c8f94;
+}
+
+/* Button Styles */
+.localpoc-admin .lm-card button.button {
+  margin: 10px 0;
+  height: 36px;
+  line-height: 34px;
+  padding: 0 16px;
+  font-size: 13px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.localpoc-admin .lm-card button.button-primary {
+  background: #2271b1;
+  border-color: #2271b1;
+  color: #fff;
+  text-decoration: none;
+  text-shadow: none;
+}
+
+.localpoc-admin .lm-card button.button-primary:hover {
+  background: #135e96;
+  border-color: #135e96;
+}
+
+.localpoc-admin .lm-card button.button-primary:focus {
+  box-shadow: 0 0 0 1px #fff, 0 0 0 3px #2271b1;
+}
+
+.localpoc-admin .lm-card button.button:not(.button-primary) {
+  background: #f0f0f1;
+  border: 1px solid #c3c4c7;
+  color: #2c3338;
+}
+
+.localpoc-admin .lm-card button.button:not(.button-primary):hover {
+  background: #e5e5e5;
+  border-color: #8c8f94;
+  color: #1d2327;
+}
+
+/* List Styles */
+.localpoc-admin .lm-card ol {
+  margin: 15px 0 0;
+  padding-left: 25px;
+  color: #50575e;
+}
+
+.localpoc-admin .lm-card ol li {
+  margin: 8px 0;
+  line-height: 1.6;
+}
+
+/* Paragraph Styles */
+.localpoc-admin .lm-card p {
+  margin: 0 0 10px;
+  color: #50575e;
+  line-height: 1.6;
+  font-size: 13px;
+}
+
+.localpoc-admin .lm-card p.description {
+  margin: 5px 0 0;
+  color: #646970;
+  font-style: italic;
+  font-size: 13px;
+}
+
+/* Copy Success Animation */
+@keyframes copySuccess {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.localpoc-admin button.copy-success {
+  animation: copySuccess 0.3s ease;
+}
+
+/* Responsive Design */
+@media screen and (max-width: 782px) {
+  .localpoc-admin {
+    margin: 10px;
+    max-width: 100%;
+  }
+
+  .localpoc-admin .lm-card .lm-card-body {
+    padding: 15px;
+  }
+
+  .localpoc-admin .lm-card h2 {
+    padding: 12px 15px;
+  }
+
+  .localpoc-admin .lm-card .form-table th {
+    width: 100%;
+    padding: 10px 0 5px;
+    display: block;
+  }
+
+  .localpoc-admin .lm-card .form-table td {
+    width: 100%;
+    padding: 0 0 15px;
+    display: block;
+  }
+
+  .localpoc-admin .lm-card pre {
+    font-size: 12px;
+    padding: 12px;
+  }
+
+  .localpoc-admin .lm-card button.button {
+    width: 100%;
+    margin: 10px 0;
+  }
+}
+
+@media screen and (max-width: 600px) {
+  .localpoc-admin h1 {
+    font-size: 20px;
+  }
+
+  .localpoc-admin .lm-card h2 {
+    font-size: 13px;
+  }
+
+  .localpoc-admin .lm-card pre {
+    font-size: 11px;
+    padding: 10px;
+  }
+}
+
+/* Dark Mode Support (if WP dark mode is enabled) */
+@media (prefers-color-scheme: dark) {
+  .localpoc-admin .lm-card {
+    background: #1e1e1e;
+    border-color: #3c434a;
+  }
+
+  .localpoc-admin .lm-card h2 {
+    background: #2c3338;
+    border-color: #3c434a;
+    color: #f0f0f1;
+  }
+
+  .localpoc-admin .lm-card code {
+    background: #2c3338;
+    color: #72aee6;
+  }
+
+  .localpoc-admin .lm-card pre {
+    background: #1e1e1e;
+    border-color: #3c434a;
+    color: #f0f0f1;
+  }
+
+  .localpoc-admin .lm-card p,
+  .localpoc-admin .lm-card ol,
+  .localpoc-admin .lm-card .form-table th {
+    color: #c3c4c7;
+  }
+
+  .localpoc-admin .lm-card p.description {
+    color: #8c8f94;
+  }
+}

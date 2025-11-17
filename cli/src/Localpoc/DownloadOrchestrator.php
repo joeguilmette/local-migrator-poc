@@ -74,6 +74,7 @@ class DownloadOrchestrator
                 'done'            => false,
                 'total_tables'    => (int) ($dbJobInfo['total_tables'] ?? 0),
                 'total_rows'      => (int) ($dbJobInfo['total_rows'] ?? 0),
+                'rows_processed'  => (int) ($dbJobInfo['rows_processed'] ?? 0),
             ];
             $dbJobFinished = false;
 
@@ -85,9 +86,8 @@ class DownloadOrchestrator
             ));
 
             // Set database total for renderer
-            if ($dbJobState['estimated_bytes'] > 0) {
-                $this->renderer->setDatabaseTotal($dbJobState['estimated_bytes']);
-            }
+            $this->renderer->setDatabaseRowsTotal($dbJobState['total_rows']);
+            $this->renderer->updateDatabaseRows($dbJobState['rows_processed']);
 
             $lastDbPoll = 0.0;
             $reportDbProgress = function (int $newBytes) use (&$dbJobState): void {
@@ -97,8 +97,6 @@ class DownloadOrchestrator
                 $delta = $newBytes - $dbJobState['reported_bytes'];
                 $dbJobState['reported_bytes'] = $newBytes;
                 $this->progressTracker->incrementDbBytes($delta);
-                // Update renderer with cumulative bytes
-                $this->renderer->updateDatabase($newBytes);
             };
 
             $lastDbLog = 0.0;
@@ -118,6 +116,12 @@ class DownloadOrchestrator
                 if ($newBytes > $dbJobState['bytes_written']) {
                     $dbJobState['bytes_written'] = $newBytes;
                     $reportDbProgress($newBytes);
+                }
+
+                $rowsProcessed = (int) ($progress['rows_processed'] ?? $dbJobState['rows_processed']);
+                if ($rowsProcessed > $dbJobState['rows_processed']) {
+                    $dbJobState['rows_processed'] = $rowsProcessed;
+                    $this->renderer->updateDatabaseRows($rowsProcessed);
                 }
 
                 $completed = (int) ($progress['completed_tables'] ?? 0);
@@ -208,6 +212,7 @@ class DownloadOrchestrator
             $filesCompleted = 0;
             $filesFailed = 0;
             $bytesDownloaded = 0;
+            $rendererRef = $this->renderer;
 
             // Download files only (DB job polled via callback)
             $results = $this->downloader->downloadFilesOnly(
@@ -217,19 +222,16 @@ class DownloadOrchestrator
                 $largeFiles,
                 $filesRoot,
                 $concurrency,
-                function (int $bytes) use (&$bytesDownloaded, &$filesCompleted, &$filesFailed): void {
+                function (int $bytes) use (&$bytesDownloaded, &$filesCompleted, &$filesFailed, $rendererRef): void {
                     $bytesDownloaded += $bytes;
-                    // Note: We can't easily track individual file completion here,
-                    // but we can update bytes. The progressTracker handles file counts.
                     $this->progressTracker->incrementFileBytes($bytes);
 
-                    // Update renderer with current state from progressTracker
                     $counts = $this->progressTracker->getCurrentCounts();
-                    $this->renderer->updateFiles(
-                        $counts['files_completed'] ?? $filesCompleted,
-                        $counts['files_failed'] ?? $filesFailed,
-                        $bytesDownloaded
-                    );
+                    $filesCompleted = (int) ($counts['files_completed'] ?? $filesCompleted);
+                    $filesFailed = (int) ($counts['files_failed'] ?? $filesFailed);
+
+                    $rendererRef->updateFiles($filesCompleted, $filesFailed);
+                    $rendererRef->addTransferredBytes($bytes);
                 },
                 function () use ($pollDbJob): void {
                     $pollDbJob();
@@ -269,12 +271,12 @@ class DownloadOrchestrator
                 $key,
                 $dbJobId,
                 $dbPath,
-                function (int $bytes) use (&$downloadedBytes, &$dbJobState): void {
+                function (int $bytes) use (&$downloadedBytes, $rendererRef): void {
                     $downloadedBytes += $bytes;
-                    // FIX: Update the renderer during database download
-                    $this->renderer->updateDatabase($dbJobState['bytes_written'] + $downloadedBytes);
+                    $rendererRef->addTransferredBytes($bytes);
                 }
             );
+            $this->renderer->updateDatabaseRows($dbJobState['total_rows'] ?: $dbJobState['rows_processed']);
             if (file_exists($dbPath)) {
                 $hashValue = sha1_file($dbPath) ?: 'n/a';
                 $this->info(sprintf(

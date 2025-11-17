@@ -112,7 +112,7 @@ class BatchZipExtractor
             ];
         } catch (RuntimeException $e) {
             $this->progressTracker->markBatchFailure(count($batch));
-            fwrite(STDERR, "[localpoc] ERROR: Batch extraction failed: " . $e->getMessage() . "\n");
+            fwrite(STDERR, "[lm] ERROR: Batch extraction failed: " . $e->getMessage() . "\n");
 
             return [
                 'files_succeeded' => 0,

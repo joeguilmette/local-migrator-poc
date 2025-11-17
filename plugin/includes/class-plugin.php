@@ -145,9 +145,18 @@ class LocalPOC_Plugin {
             return;
         }
 
+        $plugin_main_file = LOCALPOC_PLUGIN_DIR . 'local-migrator.php';
+
+        wp_enqueue_style(
+            'localpoc-admin',
+            plugins_url('assets/css/localpoc-admin.css', $plugin_main_file),
+            [],
+            LOCALPOC_VERSION
+        );
+
         wp_enqueue_script(
             'localpoc-admin',
-            plugins_url('assets/js/localpoc-admin.js', dirname(__FILE__)),
+            plugins_url('assets/js/localpoc-admin.js', $plugin_main_file),
             [],
             LOCALPOC_VERSION,
             true
@@ -165,56 +174,62 @@ class LocalPOC_Plugin {
         $access_key = self::get_access_key();
         $site_url = site_url();
         ?>
-        <div class="wrap">
-            <h1><?php echo esc_html__('LocalPOC Site Downloader', 'localpoc'); ?></h1>
+        <div class="wrap localpoc-admin">
+            <h1><?php echo esc_html__('Local Migrator', 'localpoc'); ?></h1>
 
-            <div class="card">
+            <div class="lm-card">
                 <h2><?php echo esc_html__('Connection Details', 'localpoc'); ?></h2>
-                <table class="form-table">
-                    <tr>
-                        <th scope="row"><?php echo esc_html__('Site URL', 'localpoc'); ?></th>
-                        <td>
-                            <code><?php echo esc_html($site_url); ?></code>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><?php echo esc_html__('Access Key', 'localpoc'); ?></th>
-                        <td>
-                            <code><?php echo esc_html($access_key); ?></code>
-                            <p class="description">
-                                <?php echo esc_html__('This key authorizes the CLI tool to download your site.', 'localpoc'); ?>
-                            </p>
-                        </td>
-                    </tr>
-                </table>
+                <div class="lm-card-body">
+                    <table class="form-table">
+                        <tr>
+                            <th scope="row"><?php echo esc_html__('Site URL', 'localpoc'); ?></th>
+                            <td>
+                                <code><?php echo esc_html($site_url); ?></code>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><?php echo esc_html__('Access Key', 'localpoc'); ?></th>
+                            <td>
+                                <code><?php echo esc_html($access_key); ?></code>
+                                <p class="description">
+                                    <?php echo esc_html__('This key authorizes the CLI tool to download your site.', 'localpoc'); ?>
+                                </p>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
             </div>
 
-            <div class="card">
+            <div class="lm-card">
                 <h2><?php echo esc_html__('CLI Command', 'localpoc'); ?></h2>
-                <p><?php echo esc_html__('Run this command to download your WordPress site:', 'localpoc'); ?></p>
+                <div class="lm-card-body">
+                    <p><?php echo esc_html__('Run this command to download your WordPress site:', 'localpoc'); ?></p>
 
-                <pre id="localpoc-cli-command" style="background: #f0f0f1; padding: 12px; border-radius: 4px; overflow-x: auto;">localpoc download --url="<?php echo esc_attr($site_url); ?>" --key="<?php echo esc_attr($access_key); ?>" --output="./local-backup"</pre>
+                    <pre id="localpoc-cli-command">lm download --url="<?php echo esc_attr($site_url); ?>" --key="<?php echo esc_attr($access_key); ?>" --output="./local-backup"</pre>
 
-                <button type="button" id="localpoc-copy-command" class="button button-primary">
-                    <?php echo esc_html__('Copy Download Command', 'localpoc'); ?>
-                </button>
+                    <button type="button" id="localpoc-copy-command" class="button button-primary">
+                        <?php echo esc_html__('Copy Download Command', 'localpoc'); ?>
+                    </button>
+                </div>
             </div>
 
-            <div class="card">
+            <div class="lm-card">
                 <h2><?php echo esc_html__('Next Steps', 'localpoc'); ?></h2>
-                <p><?php echo esc_html__('To use the download command above, first install the LocalPOC CLI tool:', 'localpoc'); ?></p>
+                <div class="lm-card-body">
+                    <p><?php echo esc_html__('To use the download command above, first install the Local Migrator CLI:', 'localpoc'); ?></p>
 
-                <pre id="localpoc-install-cmd" style="background: #23282d; color: #fff; padding: 12px; border-radius: 4px;">curl -L https://github.com/joeguilmette/local-migrator-poc/releases/latest/download/localpoc.phar -o /tmp/localpoc && chmod +x /tmp/localpoc && sudo mv /tmp/localpoc /usr/local/bin/localpoc</pre>
+                    <pre id="localpoc-install-cmd">curl -L https://github.com/joeguilmette/local-migrator-poc/releases/latest/download/local-migrator.phar -o /tmp/local-migrator && chmod +x /tmp/local-migrator && sudo mv /tmp/local-migrator /usr/local/bin/lm</pre>
 
-                <button type="button" id="localpoc-copy-install" class="button">
-                    <?php echo esc_html__('Copy Install Command', 'localpoc'); ?>
-                </button>
+                    <button type="button" id="localpoc-copy-install" class="button">
+                        <?php echo esc_html__('Copy Install Command', 'localpoc'); ?>
+                    </button>
 
-                <ol style="margin-top: 20px;">
-                    <li><?php echo esc_html__('Copy and run the install command above', 'localpoc'); ?></li>
-                    <li><?php echo esc_html__('Verify with: localpoc --version', 'localpoc'); ?></li>
-                    <li><?php echo esc_html__('Run the download command to get your site', 'localpoc'); ?></li>
-                </ol>
+                    <ol>
+                        <li><?php echo esc_html__('Copy and run the install command above', 'localpoc'); ?></li>
+                        <li><?php echo esc_html__('Verify with: lm --version', 'localpoc'); ?></li>
+                        <li><?php echo esc_html__('Run the download command to get your site', 'localpoc'); ?></li>
+                    </ol>
+                </div>
             </div>
         </div>
         <?php

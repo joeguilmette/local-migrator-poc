@@ -24,7 +24,7 @@ class ArchiveBuilder
         $tmpRoot = $normalized . DIRECTORY_SEPARATOR . '.tmp';
         FileOperations::ensureOutputDir($tmpRoot);
 
-        $workspace = $tmpRoot . DIRECTORY_SEPARATOR . uniqid('localpoc_', true);
+        $workspace = $tmpRoot . DIRECTORY_SEPARATOR . uniqid('local-migrator_', true);
         if (!mkdir($workspace, 0755, true) && !is_dir($workspace)) {
             throw new RuntimeException('Unable to create temp workspace: ' . $workspace);
         }

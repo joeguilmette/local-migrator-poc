@@ -2,8 +2,8 @@
 
 Local Migrator has two parts:
 
-- A WordPress plugin (`plugin/localpoc.php`) that exposes authenticated REST endpoints.
-- A CLI (`localpoc`), packaged as a PHAR, that connects to the plugin and downloads the site (files + database) efficiently.
+- A WordPress plugin (`plugin/local-migrator.php`) that exposes authenticated REST endpoints.
+- A CLI (`lm`), packaged as `local-migrator.phar`, that connects to the plugin and downloads the site (files + database) efficiently.
 
 You install the plugin on a site, copy the command it shows you, and run that command locally.
 
@@ -11,19 +11,32 @@ You install the plugin on a site, copy the command it shows you, and run that co
 
 ## 1. Install the WordPress plugin
 
-1. Download the latest `localpoc-plugin.zip` from the [releases page](https://github.com/joeguilmette/local-migrator-poc/releases/latest).
+1. Download the latest `local-migrator-plugin.zip` from the [releases page](https://github.com/joeguilmette/local-migrator-poc/releases/latest).
 2. Install and activate the plugin in WordPress.
 
 ## 2. Install the CLI (PHAR)
 
-One-liner install (Mac/Linux):
+Run this installer (macOS/Linux) to place the CLI at `/usr/local/bin/lm`. If another tool already uses `lm`, the script automatically falls back to `lm-wp`.
 
 ```bash
-curl -L "https://github.com/joeguilmette/local-migrator-poc/releases/latest/download/localpoc.phar" -o localpoc \
-  && chmod +x localpoc \
-  && sudo mkdir -p /usr/local/bin \
-  && sudo mv localpoc /usr/local/bin/localpoc \
-  && localpoc --help
+bash <<'INSTALL'
+set -e
+URL="https://github.com/joeguilmette/local-migrator-poc/releases/latest/download/local-migrator.phar"
+TMP="/tmp/local-migrator.phar"
+curl -sSL "$URL" -o "$TMP"
+chmod +x "$TMP"
+TARGET="/usr/local/bin/lm"
+ALT="/usr/local/bin/lm-wp"
+EXISTING="$(command -v lm || true)"
+if [ -n "$EXISTING" ] && [ "$EXISTING" != "$TARGET" ]; then
+  echo "Found existing 'lm' at $EXISTING, installing as 'lm-wp'."
+  TARGET="$ALT"
+fi
+sudo mv "$TMP" "$TARGET"
+echo "Installed to $TARGET"
+INSTALL
+
+lm --help
 ```
 
 ---
@@ -33,7 +46,7 @@ curl -L "https://github.com/joeguilmette/local-migrator-poc/releases/latest/down
 Basic command:
 
 ```bash
-localpoc download --url=<URL> --key=<KEY> [--output=<DIR>] [--concurrency=<N>]
+lm download --url=<URL> --key=<KEY> [--output=<DIR>] [--concurrency=<N>]
 ```
 
 * `--url`          Site base URL (from the plugin page), e.g. `https://example.com`
@@ -44,7 +57,7 @@ localpoc download --url=<URL> --key=<KEY> [--output=<DIR>] [--concurrency=<N>]
 Example:
 
 ```bash
-localpoc download \
+lm download \
   --url="https://example.com" \
   --key="ACCESS_KEY_FROM_PLUGIN" \
   --output="./example-backup"
@@ -84,21 +97,21 @@ composer install
 vendor/bin/box compile
 ```
 
-The build artifact is `cli/dist/localpoc.phar`.
+The build artifact is `cli/dist/local-migrator.phar`.
 
 ### Install locally (for testing)
 
 ```bash
 cd /path/to/local-migrator-poc/cli
 sudo mkdir -p /usr/local/bin
-sudo install -m 755 dist/localpoc.phar /usr/local/bin/localpoc
-localpoc --help
+sudo install -m 755 dist/local-migrator.phar /usr/local/bin/lm
+lm --help
 ```
 
 Or run directly without installing:
 
 ```bash
-php dist/localpoc.phar download --url=... --key=... --output=...
+php dist/local-migrator.phar download --url=... --key=... --output=...
 ```
 
 ### Generate Plugin and PHAR, then publish a release
@@ -109,9 +122,7 @@ Use the helper script (`scripts/release.sh`, requires the [GitHub CLI](https://c
 ./scripts/release.sh
 ```
 
-The script builds the plugin ZIP and PHAR, then creates or updates the GitHub release (attaching `localpoc-plugin-<version>.zip` and `cli/dist/localpoc.phar`).
-
-It will also install the latest version of the PHAR locally.
+The script builds the plugin ZIP and PHAR, then creates or updates the GitHub release (attaching `local-migrator-plugin-<version>.zip` and `cli/dist/local-migrator.phar`). It also installs the freshly built PHAR locally (handling the `lm`/`lm-wp` fallback automatically).
 
 ---
 
@@ -120,10 +131,10 @@ It will also install the latest version of the PHAR locally.
 * Remove the CLI:
 
   ```bash
-  sudo rm /usr/local/bin/localpoc
+  sudo rm /usr/local/bin/lm
   ```
 
 * Remove the plugin:
 
   * Deactivate it from the WordPress Plugins screen.
-  * Delete `wp-content/plugins/localpoc/`.
+  * Delete `wp-content/plugins/local-migrator/`.

@@ -172,6 +172,7 @@ class LocalPOC_Database_Job_Manager {
                 'bytes_written' => $bytes_written,
                 'estimated_bytes' => $meta['total_approx_bytes'],
                 'total_rows' => $meta['total_rows'],
+                'rows_processed' => 0,
                 'warnings' => []
             ];
 
@@ -183,7 +184,8 @@ class LocalPOC_Database_Job_Manager {
                 'bytes_written' => $bytes_written,
                 'estimated_bytes' => $meta['total_approx_bytes'],
                 'total_tables' => $meta['total_tables'],
-                'total_rows' => $meta['total_rows']
+                'total_rows' => $meta['total_rows'],
+                'rows_processed' => 0,
             ];
 
         } catch (Exception $e) {
@@ -226,6 +228,10 @@ class LocalPOC_Database_Job_Manager {
             );
         }
 
+        if (!isset($job_meta['rows_processed'])) {
+            $job_meta['rows_processed'] = 0;
+        }
+
         // Check if job is already completed
         if ($job_meta['state'] === 'completed') {
             return [
@@ -236,7 +242,8 @@ class LocalPOC_Database_Job_Manager {
                 'last_batch_rows' => 0,
                 'file_size' => filesize($job_meta['file_path']),
                 'done' => true,
-                'warnings' => $job_meta['warnings']
+                'warnings' => $job_meta['warnings'],
+                'rows_processed' => (int) ($job_meta['rows_processed'] ?? 0),
             ];
         }
 
@@ -331,11 +338,13 @@ class LocalPOC_Database_Job_Manager {
 
                     // Update offset for next batch
                     $job_meta['current_table_offset'] += $batch_size;
+                    $job_meta['rows_processed'] = ($job_meta['rows_processed'] ?? 0) + $last_batch_rows;
                 } else {
                     // Table complete, move to next table
                     $job_meta['completed_tables'][] = $table_name;
                     $job_meta['current_table_index']++;
                     $job_meta['current_table_offset'] = 0;
+                    $last_batch_rows = 0;
                 }
             }
 
@@ -375,7 +384,8 @@ class LocalPOC_Database_Job_Manager {
                 'last_batch_rows' => $last_batch_rows,
                 'file_size' => filesize($job_meta['file_path']),
                 'done' => $done,
-                'warnings' => $job_meta['warnings']
+                'warnings' => $job_meta['warnings'],
+                'rows_processed' => (int) ($job_meta['rows_processed'] ?? 0),
             ];
 
         } catch (Exception $e) {

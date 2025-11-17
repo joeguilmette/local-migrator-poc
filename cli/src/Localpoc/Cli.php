@@ -12,7 +12,7 @@ use Localpoc\UI\TerminalRenderer;
  */
 class Cli
 {
-    private const VERSION = '0.0.17';
+    private const VERSION = '0.0.21';
 
     private const DEFAULT_OUTPUT = './local-backup';
     private const DEFAULT_CONCURRENCY = 4;
@@ -149,7 +149,7 @@ class Cli
     private function printUsage(): void
     {
         $usage = <<<USAGE
-Usage: localpoc download --url=<URL> --key=<KEY> [OPTIONS]
+Usage: lm download --url=<URL> --key=<KEY> [OPTIONS]
 
 Options:
   --output=<DIR>      Output directory (default: ./local-backup)
@@ -157,8 +157,8 @@ Options:
   --plain             Use plain text output (no progress bars)
 
 Examples:
-  localpoc download --url="https://site.com" --key="ABC123"
-  localpoc download --url="https://site.com" --key="ABC123" --plain
+  lm download --url="https://site.com" --key="ABC123"
+  lm download --url="https://site.com" --key="ABC123" --plain
 
 USAGE;
         fwrite(STDOUT, $usage);
@@ -172,6 +172,6 @@ USAGE;
      */
     private function error(string $message): void
     {
-        fwrite(STDERR, '[localpoc] ERROR: ' . $message . "\n");
+        fwrite(STDERR, '[lm] ERROR: ' . $message . "\n");
     }
 }

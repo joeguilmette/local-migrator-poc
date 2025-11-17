@@ -1,6 +1,6 @@
 {
-  "name": "localpoc/localpoc",
-  "description": "LocalPOC WordPress downloader (POC) CLI",
+  "name": "localmigrator/local-migrator",
+  "description": "Local Migrator WordPress downloader CLI",
   "type": "project",
   "require": {
     "php": "^8.0"
@@ -14,6 +14,6 @@
     }
   },
   "bin": [
-    "bin/localpoc"
+    "bin/lm"
   ]
 }

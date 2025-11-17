@@ -190,7 +190,7 @@ class ConcurrentDownloader
     private function createBatchTransfer(string $adminAjaxUrl, string $key, array $batch, string $filesOutputDir): array
     {
         // Create temp file for ZIP download
-        $tempZip = tempnam(sys_get_temp_dir(), 'localpoc-batch');
+        $tempZip = tempnam(sys_get_temp_dir(), 'local-migrator-batch');
         if ($tempZip === false) {
             throw new RuntimeException('Unable to create temp file for batch download.');
         }

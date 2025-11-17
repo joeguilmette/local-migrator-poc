@@ -97,7 +97,7 @@ class LocalPOC_Batch_Processor {
             );
         }
 
-        $tmp = wp_tempnam('localpoc-batch');
+        $tmp = wp_tempnam('local-migrator-batch');
         $zip = new ZipArchive();
         if ($zip->open($tmp, ZipArchive::OVERWRITE) !== true) {
             @unlink($tmp);

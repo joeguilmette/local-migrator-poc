@@ -56,7 +56,7 @@ class ManifestCollector
                 'job_id'      => $jobId,
             ], $key);
         } catch (HttpException $e) {
-            fwrite(STDERR, "[localpoc] ERROR: Failed to finish manifest job: " . $e->getMessage() . "\n");
+            fwrite(STDERR, "[lm] ERROR: Failed to finish manifest job: " . $e->getMessage() . "\n");
         }
     }
 
