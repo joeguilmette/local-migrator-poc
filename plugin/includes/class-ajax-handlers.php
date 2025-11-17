@@ -128,7 +128,11 @@ class LocalPOC_Ajax_Handlers {
             LocalPOC_Request_Handler::ajax_send_error($auth_result);
         }
 
-        wp_send_json(LocalPOC_Database_Job_Manager::get_db_meta_data());
+        $result = LocalPOC_Database_Job_Manager::get_db_meta_data();
+        if ($result instanceof WP_Error) {
+            LocalPOC_Request_Handler::ajax_send_error($result);
+        }
+        wp_send_json($result);
     }
 
     /**
@@ -322,7 +326,10 @@ class LocalPOC_Ajax_Handlers {
             ));
         }
 
-        LocalPOC_Database_Job_Manager::finish_job($job_id);
+        $result = LocalPOC_Database_Job_Manager::finish_job($job_id);
+        if ($result instanceof WP_Error) {
+            LocalPOC_Request_Handler::ajax_send_error($result);
+        }
 
         wp_send_json(['ok' => true]);
     }
