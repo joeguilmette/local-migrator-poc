@@ -33,6 +33,9 @@ class LocalPOC_Plugin {
         // Handle activation redirect
         add_action('admin_init', [__CLASS__, 'activation_redirect']);
 
+        // Enqueue admin scripts
+        add_action('admin_enqueue_scripts', [__CLASS__, 'enqueue_admin_assets']);
+
         // Register AJAX endpoints (logged-in + unauthenticated)
         add_action('wp_ajax_localpoc_files_manifest', [LocalPOC_Ajax_Handlers::class, 'files_manifest']);
         add_action('wp_ajax_nopriv_localpoc_files_manifest', [LocalPOC_Ajax_Handlers::class, 'files_manifest']);
@@ -132,6 +135,35 @@ class LocalPOC_Plugin {
     }
 
     /**
+     * Enqueues admin scripts and styles
+     *
+     * @param string $hook The current admin page hook
+     */
+    public static function enqueue_admin_assets($hook) {
+        // Only load on our settings page
+        if (!isset($_GET['page']) || $_GET['page'] !== 'localpoc-downloader') {
+            return;
+        }
+
+        $plugin_main_file = LOCALPOC_PLUGIN_DIR . 'local-migrator.php';
+
+        wp_enqueue_style(
+            'localpoc-admin',
+            plugins_url('assets/css/localpoc-admin.css', $plugin_main_file),
+            [],
+            LOCALPOC_VERSION
+        );
+
+        wp_enqueue_script(
+            'localpoc-admin',
+            plugins_url('assets/js/localpoc-admin.js', $plugin_main_file),
+            [],
+            LOCALPOC_VERSION,
+            true
+        );
+    }
+
+    /**
      * Renders the admin settings page
      */
     public static function render_admin_page() {
@@ -141,78 +173,63 @@ class LocalPOC_Plugin {
 
         $access_key = self::get_access_key();
         $site_url = site_url();
-        $cli_command = sprintf(
-            'localpoc download --url="%s" --key="%s" --output="./local-backup"',
-            esc_attr($site_url),
-            esc_attr($access_key)
-        );
-
         ?>
-        <div class="wrap">
-            <h1>Local Migrator</h1>
+        <div class="wrap localpoc-admin">
+            <h1><?php echo esc_html__('Local Migrator', 'localpoc'); ?></h1>
 
-            <div style="max-width: 800px;">
-                <h2>Connection Details</h2>
-
-                <table class="form-table">
-                    <tr>
-                        <th scope="row">
-                            <label for="site-url">Site URL</label>
-                        </th>
-                        <td>
-                            <input
-                                type="text"
-                                id="site-url"
-                                class="regular-text"
-                                value="<?php echo esc_attr($site_url); ?>"
-                                readonly
-                            />
-                            <p class="description">The base URL of this WordPress site.</p>
-                        </td>
-                    </tr>
-
-                    <tr>
-                        <th scope="row">
-                            <label for="access-key">Access Key</label>
-                        </th>
-                        <td>
-                            <input
-                                type="text"
-                                id="access-key"
-                                class="regular-text"
-                                value="<?php echo esc_attr($access_key); ?>"
-                                readonly
-                            />
-                            <p class="description">Your unique access key for CLI authentication.</p>
-                        </td>
-                    </tr>
-                </table>
-
-                <h2>CLI Command</h2>
-                <p>Copy and run this command on your local machine (requires CLI tool installed):</p>
-
-                <div style="background: #f5f5f5; padding: 15px; border-left: 4px solid #2271b1; margin: 20px 0;">
-                    <code style="display: block; word-wrap: break-word; white-space: pre-wrap;"><?php echo esc_html($cli_command); ?></code>
+            <div class="card">
+                <h2 class="title"><?php echo esc_html__('Connection Details', 'localpoc'); ?></h2>
+                <div class="inside">
+                    <table class="form-table">
+                        <tr>
+                            <th scope="row"><?php echo esc_html__('Site URL', 'localpoc'); ?></th>
+                            <td>
+                                <code><?php echo esc_html($site_url); ?></code>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><?php echo esc_html__('Access Key', 'localpoc'); ?></th>
+                            <td>
+                                <code><?php echo esc_html($access_key); ?></code>
+                                <p class="description">
+                                    <?php echo esc_html__('This key authorizes the CLI tool to download your site.', 'localpoc'); ?>
+                                </p>
+                            </td>
+                        </tr>
+                    </table>
                 </div>
+            </div>
 
-                <p>
-                    <button
-                        type="button"
-                        class="button button-secondary"
-                        onclick="navigator.clipboard.writeText('<?php echo esc_js($cli_command); ?>').then(() => alert('Command copied to clipboard!'))"
-                    >
-                        Copy Command
+            <div class="card">
+                <h2 class="title"><?php echo esc_html__('CLI Command', 'localpoc'); ?></h2>
+                <div class="inside">
+                    <p><?php echo esc_html__('Run this command to download your WordPress site:', 'localpoc'); ?></p>
+
+                    <pre id="localpoc-cli-command">lm download --url="<?php echo esc_attr($site_url); ?>" --key="<?php echo esc_attr($access_key); ?>" --output="./local-backup"</pre>
+
+                    <button type="button" id="localpoc-copy-command" class="button button-primary">
+                        <?php echo esc_html__('Copy Download Command', 'localpoc'); ?>
                     </button>
-                </p>
+                </div>
+            </div>
 
-                <hr style="margin: 30px 0;" />
+            <div class="card">
+                <h2 class="title"><?php echo esc_html__('Next Steps', 'localpoc'); ?></h2>
+                <div class="inside">
+                    <p><?php echo esc_html__('To use the download command above, first install the Local Migrator CLI:', 'localpoc'); ?></p>
 
-                <h2>Next Steps</h2>
-                <ol>
-                    <li>Install the Local Site Downloader CLI tool on your local machine</li>
-                    <li>Copy the command above</li>
-                    <li>Run it in your terminal to download this WordPress site</li>
-                </ol>
+                    <pre id="localpoc-install-cmd">curl -L https://github.com/joeguilmette/local-migrator-poc/releases/latest/download/local-migrator.phar -o /tmp/local-migrator && chmod +x /tmp/local-migrator && sudo mv /tmp/local-migrator /usr/local/bin/lm</pre>
+
+                    <button type="button" id="localpoc-copy-install" class="button">
+                        <?php echo esc_html__('Copy Install Command', 'localpoc'); ?>
+                    </button>
+
+                    <ol>
+                        <li><?php echo esc_html__('Copy and run the install command above', 'localpoc'); ?></li>
+                        <li><?php echo esc_html__('Verify with: lm --version', 'localpoc'); ?></li>
+                        <li><?php echo esc_html__('Run the download command to get your site', 'localpoc'); ?></li>
+                    </ol>
+                </div>
             </div>
         </div>
         <?php

@@ -28,6 +28,16 @@ class ProgressTracker
     }
 
     /**
+     * Gets current progress counts
+     *
+     * @return array Current progress state
+     */
+    public function getCurrentCounts(): array
+    {
+        return $this->progress;
+    }
+
+    /**
      * Initializes progress counters
      *
      * @param int $fileTotal Total number of files
@@ -188,15 +198,15 @@ class ProgressTracker
         $line = sprintf('DB: %s | Files: %s | Overall: %s', $dbPart, $filesPart, $overall);
 
         if ($this->interactive) {
-            $output = "\r[localpoc] " . $line;
+            $output = "\r[lm] " . $line;
             fwrite(STDOUT, $output);
             $this->dirty = true;
             if ($final) {
-                fwrite(STDOUT, "\r[localpoc] {$line}\n");
+                fwrite(STDOUT, "\r[lm] {$line}\n");
                 $this->dirty = false;
             }
         } elseif ($final || $force) {
-            fwrite(STDOUT, "[localpoc] {$line}\n");
+            fwrite(STDOUT, "[lm] {$line}\n");
         }
     }
 

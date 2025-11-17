@@ -1,8 +1,8 @@
 {
-  "main": "bin/localpoc",
-  "output": "dist/localpoc.phar",
+  "main": "bin/lm",
+  "output": "dist/local-migrator.phar",
   "chmod": "0755",
-  "stub": true,
+  "stub": "stub.php",
   "compression": "GZ",
   "directories": [
     "bin",

@@ -1,0 +1,30 @@
+/* Local Migrator Admin Styles - Minimal overrides using WordPress defaults */
+
+/* Cards already styled by WordPress, just add spacing between them */
+.localpoc-admin .card {
+  margin-bottom: 20px;
+  max-width: 800px;
+}
+
+/* WordPress doesn't style pre blocks well in cards */
+.localpoc-admin pre {
+  background: #f0f0f1;
+  padding: 12px;
+  overflow-x: auto;
+  white-space: pre;
+  word-wrap: normal;
+  font-family: Consolas, Monaco, monospace;
+  font-size: 13px;
+  border: 1px solid #dcdcde;
+  margin: 10px 0;
+}
+
+/* Basic button spacing */
+.localpoc-admin button {
+  margin-top: 10px;
+}
+
+/* Ensure form tables in cards display properly */
+.localpoc-admin .form-table th {
+  width: 200px;
+}

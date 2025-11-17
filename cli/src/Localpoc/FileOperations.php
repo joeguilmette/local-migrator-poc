@@ -76,10 +76,9 @@ class FileOperations
 
             return (int) ($response['total_approx_bytes'] ?? 0);
         } catch (HttpException $e) {
-            fwrite(STDERR, "[localpoc] ERROR: Failed to fetch DB meta: " . $e->getMessage() . "\n");
+            // Return 0 if meta fetch fails
+            return 0;
         }
-
-        return 0;
     }
 
     /**

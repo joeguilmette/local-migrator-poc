@@ -11,11 +11,9 @@ use ZipArchive;
  */
 class BatchZipExtractor
 {
-    private ProgressTracker $progressTracker;
-
-    public function __construct(ProgressTracker $progressTracker)
+    public function __construct()
     {
-        $this->progressTracker = $progressTracker;
+        // No dependencies needed anymore
     }
 
     /**
@@ -104,16 +102,13 @@ class BatchZipExtractor
     {
         try {
             $this->extractZipArchive($zipPath, $outputDir);
-            $this->progressTracker->markBatchSuccess($batch);
 
             return [
                 'files_succeeded' => count($batch),
                 'files_failed' => 0,
             ];
         } catch (RuntimeException $e) {
-            $this->progressTracker->markBatchFailure(count($batch));
-            fwrite(STDERR, "[localpoc] ERROR: Batch extraction failed: " . $e->getMessage() . "\n");
-
+            // Error will be handled by the renderer in the orchestrator
             return [
                 'files_succeeded' => 0,
                 'files_failed' => count($batch),
