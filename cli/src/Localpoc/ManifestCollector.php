@@ -56,7 +56,7 @@ class ManifestCollector
                 'job_id'      => $jobId,
             ], $key);
         } catch (HttpException $e) {
-            fwrite(STDERR, "[lm] ERROR: Failed to finish manifest job: " . $e->getMessage() . "\n");
+            // Error finishing job is non-critical, continue
         }
     }
 

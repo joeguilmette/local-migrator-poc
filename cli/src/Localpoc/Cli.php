@@ -12,7 +12,7 @@ use Localpoc\UI\TerminalRenderer;
  */
 class Cli
 {
-    private const VERSION = '0.0.21';
+    private const VERSION = '0.0.24';
 
     private const DEFAULT_OUTPUT = './local-backup';
     private const DEFAULT_CONCURRENCY = 4;
@@ -91,6 +91,7 @@ class Cli
             'output'      => self::DEFAULT_OUTPUT,
             'concurrency' => self::DEFAULT_CONCURRENCY,
             'plain'       => false,
+            'verbose'     => false,
         ];
 
         foreach ($args as $arg) {
@@ -104,6 +105,8 @@ class Cli
                 $options['concurrency'] = (int) substr($arg, 14);
             } elseif ($arg === '--plain') {
                 $options['plain'] = true;
+            } elseif ($arg === '--verbose' || $arg === '-v') {
+                $options['verbose'] = true;
             }
         }
 
@@ -134,10 +137,9 @@ class Cli
         $renderer = new TerminalRenderer($options['plain']);
 
         // Initialize components
-        $progressTracker = new ProgressTracker();
-        $batchExtractor = new BatchZipExtractor($progressTracker);
-        $downloader = new ConcurrentDownloader($progressTracker, $batchExtractor);
-        $orchestrator = new DownloadOrchestrator($progressTracker, $downloader, $renderer);
+        $batchExtractor = new BatchZipExtractor();
+        $downloader = new ConcurrentDownloader($batchExtractor);
+        $orchestrator = new DownloadOrchestrator($downloader, $renderer, $options['verbose']);
 
         // Execute download workflow
         return $orchestrator->handleDownload($options);
@@ -155,10 +157,12 @@ Options:
   --output=<DIR>      Output directory (default: ./local-backup)
   --concurrency=<N>   Number of parallel downloads (default: 4)
   --plain             Use plain text output (no progress bars)
+  --verbose, -v       Show debug output
 
 Examples:
   lm download --url="https://site.com" --key="ABC123"
   lm download --url="https://site.com" --key="ABC123" --plain
+  lm download --url="https://site.com" --key="ABC123" --verbose
 
 USAGE;
         fwrite(STDOUT, $usage);

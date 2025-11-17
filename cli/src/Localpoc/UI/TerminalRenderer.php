@@ -3,27 +3,21 @@ declare(strict_types=1);
 
 namespace Localpoc\UI;
 
+use Localpoc\ProgressState;
+
 class TerminalRenderer
 {
     private bool $plainMode;
     private bool $interactive;
+    private bool $verbose;
     private float $lastRender = 0.0;
     private float $lastPlainRender = 0.0;
     private int $lastLineCount = 0;
+    private bool $headerShown = false;
 
-    private array $state = [
-        'site_url' => '',
-        'output_dir' => '',
-        'db_rows_total' => 0,
-        'db_rows_current' => 0,
-        'files_total' => 0,
-        'files_current' => 0,
-        'files_failed' => 0,
-        'speed_total_bytes' => 0,
-        'speed_last_bytes' => 0,
-        'speed_last_time' => 0.0,
-        'speed_display' => '0.00 MB',
-    ];
+    private string $siteUrl = '';
+    private string $outputDir = '';
+    private ?ProgressState $state = null;
 
     public function __construct(bool $plainMode = false)
     {
@@ -42,45 +36,23 @@ class TerminalRenderer
         return true;
     }
 
-    public function initialize(string $siteUrl, string $outputDir): void
+    public function initialize(string $siteUrl, string $outputDir, bool $verbose = false): void
     {
-        $this->state['site_url'] = $siteUrl;
-        $this->state['output_dir'] = $outputDir;
-        $this->render(true);
-    }
+        $this->siteUrl = $siteUrl;
+        $this->outputDir = $outputDir;
+        $this->verbose = $verbose;
 
-    public function setDatabaseRowsTotal(int $totalRows): void
-    {
-        $this->state['db_rows_total'] = max(0, $totalRows);
-        $this->render();
-    }
-
-    public function updateDatabaseRows(int $processed): void
-    {
-        $this->state['db_rows_current'] = max(0, $processed);
-        $this->render();
-    }
-
-    public function setFilesTotal(int $count, int $bytes): void
-    {
-        $this->state['files_total'] = max(0, $count);
-        // bytes not used for progress but may be useful later
-        $this->render();
-    }
-
-    public function updateFiles(int $completed, int $failed): void
-    {
-        $this->state['files_current'] = max(0, $completed);
-        $this->state['files_failed'] = max(0, $failed);
-        $this->render();
-    }
-
-    public function addTransferredBytes(int $bytes): void
-    {
-        if ($bytes <= 0) {
-            return;
+        // Show header once
+        if (!$this->headerShown && $this->interactive) {
+            fwrite(STDOUT, sprintf("Site: %s\n", $siteUrl));
+            fwrite(STDOUT, sprintf("Output: %s\n\n", $outputDir));
+            $this->headerShown = true;
         }
-        $this->state['speed_total_bytes'] += $bytes;
+    }
+
+    public function updateProgress(ProgressState $state): void
+    {
+        $this->state = $state;
         $this->render();
     }
 
@@ -91,7 +63,9 @@ class TerminalRenderer
             $this->lastLineCount = 0;
         }
         fwrite(STDOUT, "[lm] {$message}\n");
-        $this->render(true);
+        if ($this->interactive) {
+            $this->render(true);
+        }
     }
 
     public function error(string $message): void
@@ -103,31 +77,49 @@ class TerminalRenderer
         fwrite(STDERR, "[lm] ERROR: {$message}\n");
     }
 
-    public function showSummary(string $archivePath, int $archiveSize): void
+    public function showSummary(string $archivePath, int $archiveSize, ProgressState $state): void
     {
         if ($this->interactive && $this->lastLineCount > 0) {
             $this->clearLines();
             $this->lastLineCount = 0;
         }
 
+        $elapsed = microtime(true) - $state->startTime;
+        $totalBytes = $state->fileBytesDownloaded + $state->dbBytesExported + $state->dbBytesDownloaded;
+        $avgSpeed = $elapsed > 0 ? $totalBytes / $elapsed : 0;
+
         $lines = [
+            '',
             'Download complete',
-            sprintf('  Database : %s rows', $this->formatCount($this->state['db_rows_total'])),
-            sprintf('  Files    : %d files', $this->state['files_total']),
+            sprintf('  Time     : %s', $this->formatDuration($elapsed)),
+            sprintf('  Database : %s (%s rows)',
+                $this->formatBytes($state->dbBytesExported + $state->dbBytesDownloaded),
+                number_format($state->dbTotalRows)
+            ),
+            sprintf('  Files    : %s (%d files)',
+                $this->formatBytes($state->fileBytesDownloaded),
+                $state->filesCompleted
+            ),
         ];
 
-        if ($this->state['files_failed'] > 0) {
-            $lines[] = sprintf('  Failed   : %d files', $this->state['files_failed']);
+        if ($state->filesFailed > 0) {
+            $lines[] = sprintf('  Failed   : %d files', $state->filesFailed);
         }
 
+        $lines[] = sprintf('  Total    : %s', $this->formatBytes($totalBytes));
+        $lines[] = sprintf('  Speed    : %s/s avg', $this->formatBytes((int)$avgSpeed));
         $lines[] = sprintf('  Archive  : %s', $archivePath);
         $lines[] = sprintf('  Size     : %s', $this->formatBytes($archiveSize));
 
-        fwrite(STDOUT, "\n" . implode("\n", $lines) . "\n\n");
+        fwrite(STDOUT, implode("\n", $lines) . "\n\n");
     }
 
     private function render(bool $force = false): void
     {
+        if (!$this->state) {
+            return;
+        }
+
         if ($this->plainMode || !$this->interactive) {
             $this->renderPlain($force);
             return;
@@ -138,15 +130,59 @@ class TerminalRenderer
             return;
         }
         $this->lastRender = $now;
-        $this->updateSpeedDisplay($now);
 
         $lines = [];
-        $lines[] = sprintf('Site: %s', $this->state['site_url']);
-        $lines[] = sprintf('Output: %s', $this->state['output_dir']);
-        $lines[] = '';
-        $lines[] = $this->buildBar('DB', $this->state['db_rows_current'], $this->state['db_rows_total']);
-        $lines[] = $this->buildBar('Files', $this->state['files_current'], $this->state['files_total'], $this->state['files_failed']);
-        $lines[] = sprintf('Speed: %s/s', $this->state['speed_display']);
+
+        // Database progress
+        $dbTotalBytes = $this->state->dbEstimatedBytes ?: ($this->state->dbBytesExported + $this->state->dbBytesDownloaded);
+        $dbCurrentBytes = $this->state->dbBytesExported + $this->state->dbBytesDownloaded;
+        $dbProgress = $this->buildBar(
+            'DB',
+            $dbCurrentBytes,
+            $dbTotalBytes,
+            sprintf('%s / %s (%s rows)',
+                $this->formatBytes($dbCurrentBytes),
+                $this->formatBytes($dbTotalBytes),
+                $this->formatCount($this->state->dbRowsProcessed)
+            )
+        );
+        $lines[] = $dbProgress;
+
+        // Files progress
+        $filesProgress = $this->buildBar(
+            'Files',
+            $this->state->fileBytesDownloaded,
+            $this->state->filesTotalBytes,
+            sprintf('%s / %s (%d/%d files)',
+                $this->formatBytes($this->state->fileBytesDownloaded),
+                $this->formatBytes($this->state->filesTotalBytes),
+                $this->state->filesCompleted,
+                $this->state->filesTotalCount
+            )
+        );
+        if ($this->state->filesFailed > 0) {
+            $filesProgress .= sprintf(' [%d failed]', $this->state->filesFailed);
+        }
+        $lines[] = $filesProgress;
+
+        // Speed and ETA
+        $speed = $this->calculateSpeed($this->state);
+        $eta = $this->calculateETA($this->state, $speed);
+        $speedLine = sprintf('Speed: %s/s', $this->formatBytes((int)$speed));
+        if ($eta) {
+            $speedLine .= sprintf(' | ETA: %s', $eta);
+        }
+        $lines[] = $speedLine;
+
+        // Current activity
+        if ($this->state->currentActivity) {
+            $activity = $this->state->currentActivity;
+            $termWidth = $this->getTerminalWidth();
+            if (strlen($activity) > $termWidth - 10) {
+                $activity = substr($activity, 0, $termWidth - 13) . '...';
+            }
+            $lines[] = $activity;
+        }
 
         $this->clearLines();
         fwrite(STDOUT, implode("\n", $lines) . "\n");
@@ -155,44 +191,61 @@ class TerminalRenderer
 
     private function renderPlain(bool $force): void
     {
+        if (!$this->state) {
+            return;
+        }
+
         $now = microtime(true);
         if (!$force && ($now - $this->lastPlainRender) < 5.0) {
             return;
         }
         $this->lastPlainRender = $now;
-        $this->updateSpeedDisplay($now);
+
+        $dbPercent = $this->state->dbEstimatedBytes > 0
+            ? ($this->state->dbBytesExported / $this->state->dbEstimatedBytes) * 100
+            : 0;
+
+        $filesPercent = $this->state->filesTotalBytes > 0
+            ? ($this->state->fileBytesDownloaded / $this->state->filesTotalBytes) * 100
+            : 0;
 
         $line = sprintf(
-            "[lm] DB rows: %s/%s | Files: %d/%d (failed %d) | Speed: %s/s",
-            $this->formatCount($this->state['db_rows_current']),
-            $this->formatCount($this->state['db_rows_total']),
-            $this->state['files_current'],
-            $this->state['files_total'],
-            $this->state['files_failed'],
-            $this->state['speed_display']
+            "[lm] DB: %.1f%% (%s rows) | Files: %.1f%% (%d/%d)",
+            $dbPercent,
+            $this->formatCount($this->state->dbRowsProcessed),
+            $filesPercent,
+            $this->state->filesCompleted,
+            $this->state->filesTotalCount
         );
+
+        if ($this->state->filesFailed > 0) {
+            $line .= sprintf(' [%d failed]', $this->state->filesFailed);
+        }
+
+        if ($this->state->currentActivity) {
+            $line .= ' | ' . $this->state->currentActivity;
+        }
 
         fwrite(STDOUT, $line . "\n");
     }
 
-    private function buildBar(string $label, int $current, int $total, int $failed = 0): string
+    private function buildBar(string $label, int $current, int $total, string $info): string
     {
-        $width = 30;
+        $termWidth = $this->getTerminalWidth();
+        $availableWidth = $termWidth - strlen($label) - strlen($info) - 15; // Space for label, percentage, etc.
+        $barWidth = max(10, min(50, $availableWidth));
+
         $percent = $total > 0 ? min(100, ($current / $total) * 100) : 0;
-        $filled = (int) round($width * ($percent / 100));
-        $bar = '[' . str_repeat('=', $filled) . str_repeat('.', $width - $filled) . ']';
+        $filled = (int) round($barWidth * ($percent / 100));
+        $bar = '[' . str_repeat('█', $filled) . str_repeat('░', $barWidth - $filled) . ']';
 
-        $meta = sprintf('%s / %s', $this->formatCount($current), $this->formatCount($total));
-        if ($failed > 0 && $label === 'Files') {
-            $meta .= sprintf(' (failed %d)', $failed);
-        }
-
-        return sprintf('%-5s %s %5.1f%%  %s', $label . ':', $bar, $percent, $meta);
+        return sprintf('%-5s %s %5.1f%%  %s', $label . ':', $bar, $percent, $info);
     }
 
     private function clearLines(): void
     {
         if ($this->interactive && $this->lastLineCount > 0) {
+            // Move cursor up and clear lines
             fwrite(STDOUT, "\033[{$this->lastLineCount}A");
             for ($i = 0; $i < $this->lastLineCount; $i++) {
                 fwrite(STDOUT, "\033[2K\033[1B");
@@ -201,25 +254,58 @@ class TerminalRenderer
         }
     }
 
-    private function updateSpeedDisplay(float $now): void
+    private function calculateSpeed(ProgressState $state): float
     {
-        if ($this->state['speed_last_time'] === 0.0) {
-            $this->state['speed_last_time'] = $now;
-            $this->state['speed_last_bytes'] = $this->state['speed_total_bytes'];
-            $this->state['speed_display'] = '0.00 MB';
-            return;
+        $elapsed = microtime(true) - $state->startTime;
+        if ($elapsed <= 0) {
+            return 0;
         }
 
-        $deltaTime = $now - $this->state['speed_last_time'];
-        if ($deltaTime < 0.5) {
-            return;
+        $totalBytes = $state->fileBytesDownloaded + $state->dbBytesExported + $state->dbBytesDownloaded;
+        return $totalBytes / $elapsed;
+    }
+
+    private function calculateETA(ProgressState $state, float $speed): ?string
+    {
+        if ($speed <= 0) {
+            return null;
         }
 
-        $deltaBytes = $this->state['speed_total_bytes'] - $this->state['speed_last_bytes'];
-        $speed = $deltaTime > 0 ? $deltaBytes / $deltaTime : 0;
-        $this->state['speed_display'] = $this->formatBytesPerSecond($speed);
-        $this->state['speed_last_time'] = $now;
-        $this->state['speed_last_bytes'] = $this->state['speed_total_bytes'];
+        $totalExpected = $state->filesTotalBytes + ($state->dbEstimatedBytes ?: 0);
+        $totalCompleted = $state->fileBytesDownloaded + $state->dbBytesExported + $state->dbBytesDownloaded;
+
+        if ($totalCompleted >= $totalExpected) {
+            return null;
+        }
+
+        $remaining = $totalExpected - $totalCompleted;
+        $seconds = (int)($remaining / $speed);
+
+        if ($seconds < 60) {
+            return sprintf('%ds', $seconds);
+        }
+        if ($seconds < 3600) {
+            return sprintf('%dm %ds', (int)($seconds / 60), $seconds % 60);
+        }
+        return sprintf('%dh %dm', (int)($seconds / 3600), (int)(($seconds % 3600) / 60));
+    }
+
+    private function getTerminalWidth(): int
+    {
+        static $width = null;
+
+        if ($width === null) {
+            $width = 80; // default
+            if (function_exists('exec')) {
+                exec('tput cols 2>/dev/null', $output, $return);
+                if ($return === 0 && isset($output[0])) {
+                    $width = (int)$output[0];
+                }
+            }
+            $width = max(40, min(200, $width)); // Reasonable bounds
+        }
+
+        return $width;
     }
 
     private function formatBytes(int $bytes): string
@@ -227,30 +313,46 @@ class TerminalRenderer
         if ($bytes <= 0) {
             return '0 B';
         }
-        $units = ['B', 'KB', 'MB', 'GB', 'TB'];
-        $i = (int) floor(log($bytes, 1024));
-        $i = min($i, count($units) - 1);
-        $value = $bytes / pow(1024, $i);
-        return sprintf('%.2f %s', $value, $units[$i]);
-    }
 
-    private function formatBytesPerSecond(float $bytesPerSecond): string
-    {
-        if ($bytesPerSecond <= 0) {
-            return '0.00 MB';
+        $units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        $i = 0;
+        $value = (float)$bytes;
+
+        while ($value >= 1024 && $i < count($units) - 1) {
+            $value /= 1024;
+            $i++;
         }
-        $mb = $bytesPerSecond / 1048576;
-        return sprintf('%.2f MB', $mb);
+
+        if ($i === 0) {
+            return sprintf('%d %s', (int)$value, $units[$i]);
+        }
+
+        return sprintf('%.2f %s', $value, $units[$i]);
     }
 
     private function formatCount(int $value): string
     {
         if ($value >= 1000000) {
-            return sprintf('%.2fm', $value / 1000000);
+            return sprintf('%.1fm', $value / 1000000);
         }
         if ($value >= 1000) {
             return sprintf('%.1fk', $value / 1000);
         }
         return (string) $value;
+    }
+
+    private function formatDuration(float $seconds): string
+    {
+        if ($seconds < 60) {
+            return sprintf('%.1fs', $seconds);
+        }
+        if ($seconds < 3600) {
+            $mins = (int)($seconds / 60);
+            $secs = (int)($seconds % 60);
+            return sprintf('%dm %ds', $mins, $secs);
+        }
+        $hours = (int)($seconds / 3600);
+        $mins = (int)(($seconds % 3600) / 60);
+        return sprintf('%dh %dm', $hours, $mins);
     }
 }

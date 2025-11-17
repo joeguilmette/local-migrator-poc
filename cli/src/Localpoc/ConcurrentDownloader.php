@@ -13,12 +13,10 @@ class ConcurrentDownloader
 {
     /** @var CurlMultiHandle|resource|null */
     private $multiHandle = null;
-    private ProgressTracker $progressTracker;
     private BatchZipExtractor $batchExtractor;
 
-    public function __construct(ProgressTracker $progressTracker, BatchZipExtractor $batchExtractor)
+    public function __construct(BatchZipExtractor $batchExtractor)
     {
-        $this->progressTracker = $progressTracker;
         $this->batchExtractor = $batchExtractor;
     }
 
@@ -131,11 +129,23 @@ class ConcurrentDownloader
                             $batchResults['succeeded']++;
 
                             if ($progressCallback) {
-                                $progressCallback(filesize($transfer['temp_path']));
+                                $totalCompleted = $fileResults['succeeded'] + $batchResults['files_succeeded'];
+                                $totalFailed = $fileResults['failed'] + $batchResults['files_failed'];
+                                $progressCallback(
+                                    filesize($transfer['temp_path']),
+                                    $totalCompleted,
+                                    $totalFailed,
+                                    null
+                                );
                             }
                         } else {
                             $batchResults['failed']++;
                             $batchResults['files_failed'] += count($transfer['batch']);
+                            if ($progressCallback) {
+                                $totalCompleted = $fileResults['succeeded'] + $batchResults['files_succeeded'];
+                                $totalFailed = $fileResults['failed'] + $batchResults['files_failed'];
+                                $progressCallback(0, $totalCompleted, $totalFailed, null);
+                            }
                         }
                         if (isset($transfer['temp_path'])) {
                             @unlink($transfer['temp_path']);
@@ -143,11 +153,24 @@ class ConcurrentDownloader
                     } elseif ($transfer['type'] === 'file') {
                         if ($success) {
                             $fileResults['succeeded']++;
-                            if ($progressCallback && isset($transfer['file']['size'])) {
-                                $progressCallback((int) $transfer['file']['size']);
+                            if ($progressCallback) {
+                                $totalCompleted = $fileResults['succeeded'] + $batchResults['files_succeeded'];
+                                $totalFailed = $fileResults['failed'] + $batchResults['files_failed'];
+                                $currentFile = isset($transfer['file']['path']) ? $transfer['file']['path'] : null;
+                                $progressCallback(
+                                    (int) ($transfer['file']['size'] ?? 0),
+                                    $totalCompleted,
+                                    $totalFailed,
+                                    $currentFile
+                                );
                             }
                         } else {
                             $fileResults['failed']++;
+                            if ($progressCallback) {
+                                $totalCompleted = $fileResults['succeeded'] + $batchResults['files_succeeded'];
+                                $totalFailed = $fileResults['failed'] + $batchResults['files_failed'];
+                                $progressCallback(0, $totalCompleted, $totalFailed, null);
+                            }
                             if (isset($transfer['dest_path'])) {
                                 @unlink($transfer['dest_path']);
                             }
