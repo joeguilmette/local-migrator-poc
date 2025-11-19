@@ -129,6 +129,7 @@ echo "[lm] Plugin ZIP created: ${PLUGIN_ZIP_PATH}"
 
 # Create releases directory and copy artifacts
 echo "[lm] Managing releases directory..."
+rm -rf "${RELEASES_DIR}"
 mkdir -p "${RELEASES_DIR}"
 
 PHAR_RELEASE_NAME="local-migrator-${BUILD_VERSION}.phar"
